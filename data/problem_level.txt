@@ -1,0 +1,21 @@
+; LevelForge example "problem level": the level players complained about.
+; Run:  python run_demo.py --level data/problem_level.txt
+; Tiles: # wall  . floor  S start  E exit  K key  D locked door
+;        M monster (drone)  T trap (mine)  H health potion (med-kit)  C coin (data core)
+; Rules: one S, one E, outer border all '#', rows the same length, exit reachable.
+; This is the same starting level as the main rule-based demo run (seed 4).
+#######################
+#########..C###########
+###....##C.MT..TTM#####
+###....##..M#C....TM.##
+###..S.###.##.....##M##
+###....#C...#.#.####.##
+######M.MTT.#.#C####.##
+######.#....#K#.####.##
+######.######.#.####D##
+######.###.....C##....#
+###......#......##..E.#
+###......#......##....#
+###......##############
+#######################
+#######################
