@@ -33,6 +33,7 @@
 \definecolor{cagent}{HTML}{E2EEFB}
 \definecolor{cmca}{HTML}{FDEBD8}
 \definecolor{cio}{HTML}{F1F1F1}
+\definecolor{cmcp}{HTML}{E3F4E8}
 
 \begin{document}
 
@@ -51,24 +52,25 @@ M S Ramaiah Institute of Technology, Bengaluru, India\\
 Players often complain that a particular game level is too hard, confusing or unfair, but turning
 those complaints into a better level is slow, manual work that needs many rounds of play-testing.
 We present LevelForge, a framework that takes a problem level and its player reviews, places the
-level in a sandboxed \emph{digital twin}, and lets AI agents redesign it. A large language model
-(LLM) first mines the reviews into a taxonomy of design problems and derives measurable design
-targets. \emph{Design agents} (generator, critic and optimiser, orchestrated as a LangGraph state
-machine) then propose alternative structured edits, and every candidate level is play-tested by
-hundreds of \emph{player agents} with three distinct play styles. Because each simulated
-playthrough is independent, play-testing runs simultaneously on a multicore process pool, evaluating
-up to 11,250 playthroughs per optimisation run in seconds. The developer receives the optimised
-level, the reasons behind each accepted change, and per-player-type statistics. On 12 starting
-levels with an identical simulation budget, critic-guided optimisation raised mean quality from
-0.572 to 0.783 (+37\%) and beat random search on 9 of 12 levels (Wilcoxon $p=0.034$), matching
-random search's final quality with two thirds of the budget. Parallel play-testing reached a
+level in a sandboxed \emph{digital twin}, and lets a team of AI agents redesign it. A large language
+model (LLM) mines the reviews into a taxonomy of design problems and derives measurable design
+targets. Nine agents, each running as its own service and communicating over the Agent2Agent (A2A)
+protocol, then work as a master--worker team: a Director agent routes each diagnosed problem to the
+specialist that owns it (difficulty, layout or rewards), a QA agent validates their plans, and a
+Playtest agent evaluates every candidate. The agents use the twin through a Model Context Protocol
+(MCP) tool server, and every candidate is play-tested by hundreds of simulated players on an
+explicit master--worker cluster that schedules work dynamically and recovers from worker crashes
+with bit-identical results. The developer receives the optimised level, the reason behind each
+accepted change, and per-player-type statistics. On 24 starting levels with an identical simulation
+budget, the agents raised mean quality from 0.536 to 0.773 (+44\%), beat random search on 16 of 24
+levels and reached its final quality with about a third less budget; splitting the work across the
+nine-agent team preserved quality exactly (0.772, 12 wins, 12 losses). Parallel play-testing reached a
 $3.71\times$ speedup on 5 workers and $6.47\times$ on 12 logical cores, with an experimentally
-determined serial fraction of 0.086. LLM-driven design agents performed comparably to hand-written
-rules while also designing levels from scratch and explaining their changes in natural language.
+determined serial fraction of 0.086.
 \end{abstract}
 
 \begin{IEEEkeywords}
-procedural content generation, agentic AI, large language models, digital twin, automated play-testing, multicore parallelism
+procedural content generation, multi-agent systems, A2A, MCP, large language models, digital twin, master--worker parallelism
 \end{IEEEkeywords}
 
 % =====================================================================
@@ -88,10 +90,10 @@ would use, but replaces each manual step with an AI component:
 measurable design targets (\emph{Generative AI}).
 \item \textbf{Sandbox:} the level is loaded into a digital twin~\cite{grieves2017twin} of the
 game, a fast, simplified simulation that keeps the level layout and game values.
-\item \textbf{Redesign:} design agents diagnose the level's weaknesses and propose several
-alternative edits per round (\emph{agentic AI}).
+\item \textbf{Redesign:} a team of agents diagnoses the level's weaknesses; specialist agents
+propose alternative edits, and a Director agent decides (\emph{agentic AI}).
 \item \textbf{Play-test:} hundreds of player agents play every candidate level simultaneously on
-all CPU cores (\emph{multicore architecture}).
+all CPU cores of a master--worker cluster (\emph{multicore architecture}).
 \item \textbf{Report:} the developer receives the optimised level together with an explanation
 of what changed and why, so the fix can be reviewed and learned from rather than applied blindly.
 \end{enumerate}
@@ -102,18 +104,22 @@ Judging that needs many playthroughs, which is computationally expensive. LevelF
 combines LLM reasoning with large-scale parallel simulation, and keeps the LLM in a reasoning role
 while a deterministic validator guarantees that every level stays playable.
 
+The system is built from current agent standards: each agent is an independent A2A
+service~\cite{a2aspec} that other agents discover through its published Agent Card, and the digital
+twin is exposed as tools through MCP~\cite{mcpspec}, so the same tools serve our agents and any
+external MCP-capable assistant.
+
 \textbf{Contributions.}
 (i)~A review-to-brief pipeline that converts free-text player feedback into quantitative design
 targets and objective weights.
-(ii)~A two-tier multi-agent system: LLM \emph{design agents} in a generate--simulate--critique--optimise
-loop with structured, validated edits, simulation feedback and a reflection memory; and rule-based
-\emph{player agents} that play-test in the digital twin.
-(iii)~A parallel Monte-Carlo play-testing engine on a multicore process pool, with a scaling and
-task-granularity study.
-(iv)~A controlled comparison of rule-based reasoning, LLM reasoning and random search under the
-same simulation budget and starting levels.
-(v)~A developer-facing output: a report, natural-language designer notes, and a playable
-first-person 3D game built from the generated levels.
+(ii)~A nine-agent team in a master--worker organisation over A2A: a Director that routes problems
+to specialist agents with restricted action spaces, QA validation, a shared memory of failed plans,
+and LLM or rule-based reasoning in every agent.
+(iii)~An MCP tool server that makes the digital twin usable by any agent or assistant.
+(iv)~A fault-tolerant master--worker simulation cluster with dynamic scheduling, plus a scaling,
+granularity and fault-injection study.
+(v)~A controlled comparison of random search, a single-agent loop and the agent team under the same
+budget, and a developer-facing output: report, designer notes and a playable 3D game.
 
 % =====================================================================
 \section{Related Work}
@@ -140,15 +146,23 @@ Reflexion keeps a verbal memory of failed attempts~\cite{shinn2023reflexion}; ou
 failed fixes is a lightweight form of the latter. LLMs have been shown to match or outperform crowd
 workers on text annotation~\cite{gilardi2023annotation}, which motivates LLM-based review labelling.
 
-\textbf{Parallel performance.} We analyse scaling with Amdahl's law~\cite{amdahl1967} and the
-Karp--Flatt experimentally determined serial fraction~\cite{karpflatt1990}.
+\textbf{Multi-agent LLM systems and protocols.} AutoGen~\cite{wu2023autogen} composes LLM agents
+that converse to solve tasks, and MetaGPT~\cite{hong2024metagpt} assigns them software-engineering
+roles with standard procedures. These frameworks run agents inside one program. We instead follow
+two open protocols: A2A~\cite{a2aspec} for agent-to-agent tasks between separate services, and
+MCP~\cite{mcpspec} for agent-to-tool access.
+
+\textbf{Parallel performance.} Our cluster follows the master--worker pattern~\cite{mattson2004patterns};
+we analyse scaling with Amdahl's law~\cite{amdahl1967} and the Karp--Flatt experimentally
+determined serial fraction~\cite{karpflatt1990}.
 
 % =====================================================================
-\section{System Overview}
+\section{System Architecture}
 % =====================================================================
-Fig.~\ref{fig:arch} shows the pipeline. Its input is a level and the player reviews of that level;
-alternatively, the generator agent can design a first level from the reviews alone. Two kinds of
-agents work together (Table~\ref{tab:agents}): design agents decide \emph{what to change}, and
+Fig.~\ref{fig:arch} shows the three layers. \emph{Agents} talk to each other over A2A;
+\emph{tools} are reached through MCP; \emph{simulations} run on the master--worker cluster. The input
+is a level and its player reviews; alternatively, the Level Architect designs a first level from the
+reviews alone. Table~\ref{tab:agents} lists the agents. Design agents decide \emph{what to change};
 player agents measure \emph{whether the change worked}.
 
 \begin{figure*}[t]
@@ -156,71 +170,77 @@ player agents measure \emph{whether the change worked}.
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\footnotesize,
-  box/.style={draw, rounded corners=2pt, align=center, minimum height=10mm, text width=22mm, inner sep=2pt},
+  ag/.style={draw, rounded corners=2pt, align=center, minimum height=11mm, text width=19mm, inner sep=2pt, fill=cagent},
   arr/.style={-{Stealth[length=2mm]}, thick},
+  a2a/.style={{Stealth[length=1.6mm]}-{Stealth[length=1.6mm]}, thick, color=lfexit!80!black},
+  mcp/.style={-{Stealth[length=1.6mm]}, thick, dashed, color=green!45!black},
   lab/.style={font=\scriptsize\itshape, fill=white, inner sep=1pt}
 ]
-\node[box, fill=cio]    (in)   at (0,0)    {\textbf{Input}\\problem level +\\player reviews};
-\node[box, fill=cgen]   (mine) at (2.75,0) {\textbf{Review mining}\\LLM labels reviews\\(thread pool)};
-\node[box, fill=cgen]   (brief)at (5.5,0)  {\textbf{Design brief}\\targets $c^*, h^*$\\weights $w$};
-\node[box, fill=cagent] (gen)  at (8.25,0) {\textbf{Generator}\\load level, or LLM\\designs one};
-\node[box, fill=cmca]   (sim)  at (11,0)   {\textbf{Simulate}\\play-test all\\candidates};
-\node[box, fill=cagent] (fin)  at (13.75,0){\textbf{Finalize}\\LLM writes\\designer notes};
-\node[box, fill=cio]    (out)  at (16.5,0) {\textbf{Developer}\\optimised level,\\report, 3D game};
-\node[box, fill=cagent] (crit) at (11,-1.9) {\textbf{Critic}\\diagnose problems;\\memory of failures};
-\node[box, fill=cagent] (opt)  at (8.25,-1.9){\textbf{Optimizer}\\$k$ alternative\\edit plans};
-
-\draw[arr] (in) -- (mine);
-\draw[arr] (mine) -- (brief);
-\draw[arr] (brief) -- (gen);
-\draw[arr] (gen) -- (sim);
-\draw[arr] (sim) -- node[lab, above]{stop} (fin);
-\draw[arr] (fin) -- (out);
-\draw[arr] (sim) -- node[lab, right]{continue} (crit);
-\draw[arr] (crit) -- (opt);
-\draw[arr] (opt.north) -- node[lab, pos=0.35, left=1mm]{validated edits} (sim.south west);
-
-% process pool
-\node[draw, dashed, rounded corners=2pt, fill=cmca, minimum width=50mm, minimum height=15mm] (pool) at (15.1,-1.95) {};
-\node[font=\scriptsize\bfseries, anchor=north] at (pool.north) {process pool: $p$ workers (default 5)};
-\foreach \i in {1,...,5} {
-  \node[draw, fill=white, font=\tiny, minimum width=8mm, minimum height=5mm, inner sep=1pt, align=center]
-    at ($(pool.west)+(0.1+\i*0.95-0.45,-0.18)$) {W\i\\[-1pt]R\,C\,E};
+\node[draw, rounded corners=2pt, align=center, fill=cio, minimum height=11mm, text width=24mm] (in) at (0,0)
+  {\textbf{Input}\\problem level +\\player reviews};
+\node[draw, rounded corners=3pt, align=center, fill=cagent, line width=1pt, minimum height=13mm, text width=62mm] (dir) at (8.4,0)
+  {\textbf{Director (master agent)}\\discovers agents from their Agent Cards,\\routes problems, accepts or rolls back};
+\node[draw, rounded corners=2pt, align=center, fill=cio, minimum height=11mm, text width=24mm] (out) at (16.8,0)
+  {\textbf{Developer}\\optimised level, notes,\\report, 3D game};
+\draw[arr] (in) -- node[lab, above]{A2A task} (dir);
+\draw[arr] (dir) -- node[lab, above]{result} (out);
+\foreach \x/\n/\t [count=\i] in {
+  0/rev/{\textbf{Review}\\\textbf{Analyst}\\reviews$\to$brief},
+  2.4/arc/{\textbf{Level}\\\textbf{Architect}\\load / design},
+  4.8/pla/{\textbf{Playtest}\\\textbf{Analyst}\\play-test, diagnose},
+  7.2/dif/{\textbf{Difficulty}\\\textbf{Specialist}\\M, T, H},
+  9.6/lay/{\textbf{Layout}\\\textbf{Specialist}\\loops, locks},
+  12.0/rew/{\textbf{Reward}\\\textbf{Specialist}\\coins},
+  14.4/qa/{\textbf{QA}\\\textbf{Validator}\\apply + check},
+  16.8/repo/{\textbf{Reporter}\\designer\\notes}} {
+  \node[ag] (\n) at (\x,-2.3) {\t};
+  \draw[a2a] (dir.south) -- (\n.north);
 }
-\draw[arr, dashed] (sim.south east) to[out=-30, in=150] node[lab, above, pos=.5]{tasks} (pool.north west);
-
-% legend
-\node[anchor=west, font=\scriptsize] at (0,-1.55) {\tikz\fill[cgen] (0,0) rectangle (3mm,2mm); Generative AI};
-\node[anchor=west, font=\scriptsize] at (0,-1.95) {\tikz\fill[cagent] (0,0) rectangle (3mm,2mm); design agents (LangGraph)};
-\node[anchor=west, font=\scriptsize] at (0,-2.35) {\tikz\fill[cmca] (0,0) rectangle (3mm,2mm); multicore play-testing};
-\node[anchor=west, font=\scriptsize, align=left] at (3.6,-1.95) {R\,C\,E = rusher, cautious,\\explorer player agents};
+\node[lab, text=lfexit!80!black] at (3.2,-1.05) {A2A (JSON-RPC, Agent Cards)};
+\node[draw, rounded corners=2pt, fill=cmca!0!cmcp, align=center, minimum height=10mm, text width=150mm] (mcp) at (8.4,-4.3)
+  {\textbf{MCP server \texttt{levelforge-twin}} (Streamable HTTP for the team, stdio for any assistant)\\
+   tools: validate\_level, generate\_level, repair\_level, apply\_edits, level\_summary, evaluate\_levels, cluster\_status, kill\_worker, inject\_fault, get\_rules};
+\foreach \n in {arc, pla, qa} { \draw[mcp] (\n.south) -- (\n.south |- mcp.north); }
+\node[lab, text=green!45!black] at (9.6,-3.45) {MCP tool calls};
+\node[draw, rounded corners=2pt, fill=cmca, align=center, minimum height=9mm, text width=30mm] (master) at (3.0,-6.0)
+  {\textbf{Master}: chunks, queue,\\dynamic scheduling};
+\foreach \i in {1,...,5} {
+  \node[draw, fill=white, font=\scriptsize, minimum width=12mm, minimum height=8mm, align=center] (w\i) at (4.6+\i*1.65,-6.0) {W\i\\[-1pt]R\,C\,E};
+}
+\draw[arr] (mcp.south -| master.north) -- node[lab, right]{evaluate\_levels} (master.north);
+\foreach \i in {1,...,5} { \draw[arr] (master.south) |- ($(w\i.south)+(0,-0.45)$) -- (w\i.south); }
+\node[font=\scriptsize, align=left, anchor=west] at (13.8,-6.0) {crashed worker $\Rightarrow$ chunks re-queued,\\replacement started, same result};
+\node[anchor=west, font=\scriptsize] at (-1.2,-7.4) {\tikz\fill[cagent] (0,0) rectangle (3mm,2mm); agents (A2A services, LLM or rules)
+  \quad \tikz\fill[cmcp] (0,0) rectangle (3mm,2mm); tool layer (MCP)
+  \quad \tikz\fill[cmca] (0,0) rectangle (3mm,2mm); master--worker simulation cluster
+  \quad R\,C\,E = rusher, cautious, explorer player agents};
 \end{tikzpicture}}
-\caption{LevelForge pipeline. Player reviews become a design brief (GenAI). Design agents run a
-LangGraph loop: the critic diagnoses the current best level, the optimiser proposes $k$ alternative
-edit plans, and all candidates are play-tested by player agents spread over a multicore process
-pool. The loop stops after a fixed number of rounds and the developer receives the result.}
+\caption{LevelForge architecture. The Director delegates every step to eight worker agents over A2A.
+Three of them use the digital twin through the MCP server, whose \texttt{evaluate\_levels} tool runs
+all candidates of a round as one job on the master--worker cluster.}
 \label{fig:arch}
 \end{figure*}
 
 \begin{table}[t]
-\caption{The two kinds of agents in LevelForge}
+\caption{Agents in LevelForge}
 \label{tab:agents}
 \centering
 \footnotesize
-\begin{tabular}{@{}p{14mm}p{17mm}p{43mm}@{}}
+\begin{tabular}{@{}p{20mm}p{11mm}p{43mm}@{}}
 \toprule
-Agent & Implemented by & Role \\
+Agent & Reasoning & Role (MCP tools used) \\
 \midrule
-\multicolumn{3}{@{}l}{\emph{Design agents (decide what to change)}}\\
-Generator & LLM / rules & load the problem level, or design a first level from the brief \\
-Critic & LLM / rules & diagnose the level's problems from simulation metrics; avoid priorities whose fixes failed \\
-Optimizer & LLM / rules & propose $k$ alternative plans of structured edits \\
-Finalizer & LLM & explain the accepted changes to the developer \\
+\multicolumn{3}{@{}l}{\emph{Design agents (A2A services)}}\\
+Director & rules & master: delegates, routes problems, accepts or rolls back, keeps memory \\
+Review Analyst & LLM/rules & label reviews, build the design brief \\
+Level Architect & LLM/rules & load or design the first level (validate, generate) \\
+Playtest Analyst & LLM/rules & play-test candidates (evaluate\_levels); diagnose problems \\
+Difficulty, Layout, Reward Specialists & LLM/rules & propose edit plans for their own problems, using only their own edit operations \\
+QA Validator & rules & apply plans, reject empty or duplicate ones (apply\_edits) \\
+Reporter & LLM/rules & designer notes for the developer \\
 \midrule
-\multicolumn{3}{@{}l}{\emph{Player agents (measure whether it worked)}}\\
-Rusher & cost-based planner & shortest path, ignores danger \\
-Cautious & cost-based planner & avoids hazards, heals when low \\
-Explorer & cost-based planner & collects items, then exits \\
+\multicolumn{3}{@{}l}{\emph{Player agents (simulated in the twin)}}\\
+Rusher / Cautious / Explorer & planner & shortest path / avoid hazards, heal / collect items \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -317,55 +337,82 @@ each clipped to $[0,1]$, and the quality score is the weighted mean
 $Q=\sum_k w_k q_k / \sum_k w_k$ with brief-derived weights. Balance penalises both under- and
 overshooting the target; skill expression rewards levels where careful play beats reckless play.
 
-\subsection{Design Agents and the Agent Loop}
-The loop is a LangGraph~\cite{langgraph} state graph (Algorithm~\ref{alg:loop}).
-The \textbf{generator} either loads the problem level supplied by the developer or asks the LLM to
-write a grid from the brief; an invalid LLM grid gets one self-correction attempt, then
-deterministic repair. The \textbf{critic} diagnoses the best level so far using a fixed vocabulary
-of problem identifiers (e.g.\ \emph{too\_hard}, \emph{low\_skill\_expression}) and the metrics behind
-them, and keeps a memory of priorities whose fixes were rejected, moving to a different priority
-next time. The \textbf{optimizer} proposes $k=4$ alternative plans of structured edits: add or
-remove a monster, trap, potion or coin on or off the main route; open a loop; add or remove a lock.
-It also receives the simulated scores of the previous round's plans and which plans could not be
-applied. The \textbf{finalizer} writes designer notes.
+\subsection{The Agent Team (A2A)}
+Each agent runs as its own HTTP service built with the official A2A SDK (protocol v1.0). It
+publishes an Agent Card (name, description, skills, endpoint) at a well-known URL; the Director
+discovers all eight workers from their cards at start-up and then sends them tasks as JSON-RPC
+\texttt{SendMessage} requests. A task carries one JSON object naming the skill to run; the worker
+returns its result as a task artifact, or a failed task with the error. Algorithm~\ref{alg:team}
+shows one optimisation run.
 
-The LLM never edits the grid directly. Edits are validated and applied deterministically, so the
-agents' reasoning is LLM-driven but every resulting level is guaranteed playable. The rule-based
-variant replaces the LLM critic and optimizer with a hand-written diagnosis and playbook.
+\textbf{Routing.} The Playtest Analyst diagnoses the current best level with a fixed vocabulary of
+problems (e.g.\ \emph{too\_hard}, \emph{low\_skill\_expression}). The Director routes each of the top
+three problems to the specialist that \emph{owns} it: difficulty problems (too hard/easy, damage) to
+the Difficulty Specialist, flow and skill-expression problems to the Layout Specialist, engagement to
+the Reward Specialist. The top problem gets $k-2$ plan slots and the next two one slot each; with only
+two problems the Director merges one plan from each owner into an extra candidate, and spare slots go
+to exploration. Specialists only see their own edit operations (e.g.\ the Reward Specialist cannot
+add monsters), which keeps their prompts short and their plans on-topic. They are called in parallel.
+
+\textbf{Validation, decision and memory.} The QA Validator applies each plan through MCP and rejects
+plans that change nothing or duplicate another candidate. The Playtest Analyst evaluates all
+remaining candidates in one job; the Director accepts the best if it beats the current level and
+otherwise rolls back. Two memories steer later rounds: diagnosed priorities whose fixes failed are
+demoted, and edit plans already tried on the current level are shared with all specialists so they
+are not repeated.
+
+\textbf{Reasoning.} Every agent has an LLM mode and a rule mode. With an API key, the Review Analyst,
+Level Architect, Playtest Analyst (diagnosis), specialists and Reporter call the LLM; any failed call
+falls back to rules for that step. The LLM never edits the grid directly: it chooses structured edits
+(add or remove a monster, trap, potion or coin on or off the main route; open a loop; add or remove a
+lock), which are validated and applied deterministically, so every level stays playable. A
+single-agent version of the same loop, a LangGraph~\cite{langgraph} state graph with one critic and
+one optimiser, serves as the baseline in Section~\ref{sec:results}.
 
 \begin{algorithm}[t]
-\caption{Agent loop for one problem level}
-\label{alg:loop}
+\caption{Director: one optimisation run (all calls are A2A tasks)}
+\label{alg:team}
 \small
 \begin{algorithmic}[1]
-\Require level $L_0$ (or brief only), brief $B$, rounds $R$, plans $k$, runs $n$
-\State $L^\star \gets$ \Call{Generator}{$L_0$, $B$};\quad $Q^\star \gets$ \Call{Simulate}{$\{L^\star\}$}
-\State memory $\gets \emptyset$
+\Require reviews, level $L_0$ (optional), rounds $R$, plans $k$, runs $n$
+\State $B \gets$ ReviewAnalyst.\Call{build\_brief}{reviews}
+\State $L^\star \gets$ LevelArchitect.\Call{initial\_level}{$L_0$, $B$}
+\State $Q^\star \gets$ PlaytestAnalyst.\Call{playtest}{$\{L^\star\}$} \Comment{MCP $\to$ cluster}
 \For{$r = 1$ to $R$}
-  \State $D \gets$ \Call{Critic}{metrics$(L^\star)$, $B$, memory}
-  \State $\{P_1..P_k\} \gets$ \Call{Optimizer}{$D$, last round's scores}
-  \State $C_i \gets$ \Call{ApplyValidated}{$L^\star$, $P_i$} for $i=1..k$
-  \State scores $\gets$ \Call{Simulate}{$\{C_1..C_k\}$} \Comment{$k \cdot 3n$ runs, parallel}
-  \If{$\max_i Q(C_i) > Q^\star$}
-     \State $L^\star, Q^\star \gets$ best candidate \Comment{accept}
-  \Else
-     \State memory $\gets$ memory $\cup \{D.\text{priority}\}$ \Comment{reject, roll back}
-  \EndIf
+  \State $D \gets$ PlaytestAnalyst.\Call{diagnose}{$L^\star$, failed priorities}
+  \State $A \gets$ \Call{Route}{$D$, $k$} \Comment{problem $\to$ owning specialist}
+  \State $P \gets \bigcup_s$ Specialist$_s$.\Call{propose}{$A_s$, tried plans} \Comment{parallel}
+  \State $C \gets$ QAValidator.\Call{validate\_plans}{$L^\star$, $P$} \Comment{MCP apply\_edits}
+  \State scores $\gets$ PlaytestAnalyst.\Call{playtest}{$C$} \Comment{one job, $|C|\cdot 3n$ runs}
+  \If{$\max Q(C) > Q^\star$} accept best, clear tried plans
+  \Else{} roll back, mark $D$.priority as failed \EndIf
 \EndFor
-\State \Return $L^\star$, \Call{Finalize}{history}
+\State \Return $L^\star$, Reporter.\Call{write\_notes}{history}
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Parallel Play-Testing (Multicore)}
-Every playthrough (level, persona, seed) is an independent task, so play-testing is embarrassingly
-parallel: workers never communicate, and the only synchronisation is the final gather. In each
-round the tasks of all $k$ candidates are combined into one sweep of $k\cdot 3n$ tasks over a
-persistent process pool (default $p=5$). Processes are used instead of threads because the simulator
-is CPU-bound Python and the global interpreter lock would serialise threads (review labelling, which
-waits on the network, uses threads). The pool is created once per run, so its start-up cost is paid
-once. All candidates use the same seeds (common random numbers~\cite{law2015simulation}), so score
-differences come from the level, not from luck. Tasks are dispatched in small chunks (at most 8),
-a choice based on the granularity study in Section~\ref{sec:scaling}.
+\subsection{Tool Layer (MCP)}
+The digital twin is exposed by an MCP server built with the official MCP SDK. Its ten tools
+(Fig.~\ref{fig:arch}) cover validation, procedural generation, repair, structured edits, level
+summaries, play-testing and cluster control. \texttt{evaluate\_levels} takes several grids and
+plays them all in one cluster job with the same random seeds (common random
+numbers~\cite{law2015simulation}), so score differences come from the levels, not from luck. The
+agents reach the server over Streamable HTTP; the same server also runs over stdio, so an MCP-capable
+assistant (e.g.\ a desktop chat client) can evaluate and edit levels with exactly the tools our
+agents use.
+
+\subsection{Master--Worker Simulation Cluster}
+Every playthrough (level, persona, seed) is independent, so play-testing is embarrassingly parallel.
+The cluster makes the master--worker pattern~\cite{mattson2004patterns} explicit. The master splits a
+job into chunks of 8 playthroughs and keeps them in a ready queue. Each worker process has its own
+pipe and holds at most two chunks; whenever it returns one, the master sends the next. Fast workers
+therefore simply take more chunks (dynamic self-scheduling), which balances the uneven cost of
+playthroughs (Section~\ref{sec:scaling}). The master waits on the workers' pipes and on their process
+sentinels together. If a worker dies, its unfinished chunks are put back at the front of the queue
+and a replacement process is started; because every task is seeded, the job's result is identical
+to a run without the crash. Processes are used instead of threads because the simulator is
+CPU-bound Python and the global interpreter lock would serialise threads (review labelling, which
+waits on the network, uses threads). Workers are started once per run.
 
 \subsection{What the Developer Receives}
 The goal is a level the developer can \emph{learn from}, not just a new grid. Each run produces an
@@ -387,15 +434,14 @@ explorer): 31\%/31\%/34\% $\to$ 66\%/100\%/51\%.''
 finalizer writes free-form notes that also explain \emph{why} each change helped.
 
 \subsection{Implementation}
-LevelForge is about 2,800 lines of Python. The agent loop uses LangGraph; parallel play-testing uses
-the standard \texttt{multiprocessing} pool; the LLM client uses only the standard library and talks
-to an OpenAI-compatible endpoint (Groq) in JSON mode, with retries that honour the server's
-\texttt{Retry-After} header. If the API key is missing or a call fails permanently, every LLM step
-falls back to its rule-based counterpart, so a demonstration cannot break mid-run. All randomness is
-seeded, so runs are reproducible: for example,
-\texttt{run\_demo.py --offline --level data/problem\_level.txt} reproduces the case study exactly.
-The game is a single offline HTML file (Three.js bundled with esbuild) generated from the runs'
-saved data, so it needs no server and no re-simulation.
+LevelForge is written in Python (about 5,000 lines). Agents use the official A2A SDK on Starlette
+and Uvicorn; the tool server uses the official MCP SDK; the cluster uses the standard
+\texttt{multiprocessing} library. The LLM client uses only the standard library and talks to an
+OpenAI-compatible endpoint (Groq) in JSON mode, with retries that honour \texttt{Retry-After}. One
+command (\texttt{run\_team.py}) starts the MCP server with its workers and the nine agent services
+on the local machine, sends the job to the Director and writes the report; a second script crashes
+a chosen worker during a run to demonstrate recovery. All randomness is seeded, so runs are
+reproducible. The game is a single offline HTML file (Three.js) generated from the runs' data.
 
 % =====================================================================
 \section{Experimental Setup}
@@ -407,34 +453,41 @@ experiments.
 \textbf{LLM.} GPT-OSS-120B~\cite{openai2025gptoss} served through the Groq API, with JSON output
 mode and low reasoning effort. Every LLM step falls back to rules if a call fails.
 
-\textbf{Optimisation study.} Since real reviewed levels were not available, 12 procedurally
-generated levels serve as stand-ins for problem levels (their mean completion of 60\% is well below
-the 71\% target). All methods start from the same level and get the same budget: 6 rounds $\times$ 4
-candidates $\times$ 300 playthroughs. Methods: no optimisation (raw), random search (same loop with
-random edits and no critic), and the agent loop with rule-based reasoning.
+\textbf{Optimisation study.} Since real reviewed levels were not available, 24 procedurally
+generated levels serve as stand-ins for problem levels (mean completion 58\%, well below the 71\%
+target). All methods start from the same level and get the same budget: 6 rounds $\times$ 4
+candidates $\times$ 300 playthroughs. Methods: no optimisation (raw); random search (same loop,
+random edits, no diagnosis); the single-agent loop; and the nine-agent A2A team (both with rule-based
+reasoning, so that results are reproducible and free of API limits).
 
-\textbf{LLM study.} The first 4 of those levels, adding the agent loop with LLM reasoning (99 API
-calls, 425\,s in total). It is smaller because of free-tier API rate limits.
+\textbf{LLM study.} An earlier run on 4 levels compared LLM and rule-based reasoning in the
+single-agent loop (99 API calls, 425\,s). It is small because of free-tier API rate limits.
 
 \textbf{Statistics.} Paired comparisons per level: exact two-sided Wilcoxon signed-rank
 test~\cite{wilcoxon1945} and sign test.
 
 \textbf{Scaling study.} 3,600 playthroughs (6 levels $\times$ 3 personas $\times$ 200) at 1--12
-workers, best of 3 repeats, chunk size $n/(4p)$; then chunk sizes 1, 8, 180 and 720 at 5 workers.
+workers, best of 3 repeats: first with the standard process pool (chunk size $n/(4p)$, then chunk
+sizes 1, 8, 180 and 720 at 5 workers), then with the master--worker cluster, including runs in which
+1 or 2 workers are killed mid-job.
 
 % =====================================================================
 \section{Results}
+\label{sec:results}
 % =====================================================================
 \subsection{Optimisation Quality}
-Table~\ref{tab:main} summarises the 12-level study. Both optimisers improved every level over the
-raw level (Wilcoxon $p<0.001$ each): $+32\%$ for random search and $+37\%$ for the agent loop. The
-agent loop beat random search on 9 of 12 levels, with a mean paired gain of $+0.026$ (Wilcoxon
-$p=0.034$). The sign test is weaker ($p=0.146$) because it ignores the size of each difference: the
-agent's wins (up to $+0.089$) were larger than its losses (at most $-0.020$). The agent loop also
-landed closer to the completion target (74\% vs.\ 78\%).
+Table~\ref{tab:main} summarises the 24-level study. All three optimisers improved every level over
+the raw level (Wilcoxon $p<0.001$ each): $+40\%$ for random search and $+44\%$ for both agent
+systems. The single-agent loop beat random search on 16 of 24 levels (mean paired gain $+0.021$,
+Wilcoxon $p=0.072$, sign test $p=0.152$), and landed closer to the completion target (74\% vs.\
+80\%). The advantage over random search is consistent in direction but, at this sample size, not
+significant at the 5\% level; in an earlier 12-level run it was ($p=0.034$), which shows how much the
+result depends on which levels are drawn. Fig.~\ref{fig:conv} shows the clearer benefit:
+efficiency. Both agent systems reach random search's final quality (0.752) after 4--5 of the 6
+rounds, i.e.\ with about a third less simulation budget.
 
 \begin{table}[t]
-\caption{Optimisation quality on 12 levels (same budget; completion target 71\%)}
+\caption{Optimisation quality on 24 levels (same budget; completion target 71\%)}
 \label{tab:main}
 \centering
 \footnotesize
@@ -442,15 +495,13 @@ landed closer to the completion target (74\% vs.\ 78\%).
 \toprule
 Method & $Q$ (mean $\pm$ sd) & Completion \\
 \midrule
-No optimisation (raw) & $0.572 \pm 0.093$ & 60\% \\
-Random search & $0.758 \pm 0.064$ & 78\% \\
-Agent loop, rule-based & $\mathbf{0.783 \pm 0.061}$ & 74\% \\
+No optimisation (raw) & $0.536 \pm 0.146$ & 58\% \\
+Random search & $0.752 \pm 0.078$ & 80\% \\
+Single-agent loop & $\mathbf{0.773 \pm 0.065}$ & 74\% \\
+A2A agent team (9 agents) & $0.772 \pm 0.064$ & 75\% \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-Fig.~\ref{fig:conv} shows the best quality per round. The agent loop reached random search's final
-quality (0.758) by round 4, i.e.\ with about two thirds of the simulation budget.
 
 \begin{figure}[t]
 \centering
@@ -458,36 +509,51 @@ quality (0.758) by round 4, i.e.\ with about two thirds of the simulation budget
 \begin{axis}[
   width=\columnwidth, height=45mm,
   xlabel={Optimisation round}, ylabel={Mean best quality $Q$},
-  xmin=0, xmax=6, ymin=0.55, ymax=0.80,
-  xtick={0,...,6}, ytick={0.55,0.60,...,0.80},
+  xmin=0, xmax=6, ymin=0.52, ymax=0.79,
+  xtick={0,...,6}, ytick={0.55,0.60,...,0.75},
   yticklabel style={/pgf/number format/fixed, /pgf/number format/precision=2},
   grid=major, grid style={gray!20},
   legend pos=south east, legend style={font=\scriptsize},
   tick label style={font=\scriptsize}, label style={font=\footnotesize},
 ]
 \addplot[thick, color=lfexit, mark=*, mark size=1.5pt] coordinates
-  {(0,0.572)(1,0.664)(2,0.710)(3,0.735)(4,0.762)(5,0.773)(6,0.783)};
-\addlegendentry{Agent loop (rules)}
+  {(0,0.536)(1,0.627)(2,0.700)(3,0.731)(4,0.749)(5,0.766)(6,0.773)};
+\addlegendentry{Single-agent loop}
+\addplot[thick, color=lfkey, mark=triangle*, mark size=1.8pt] coordinates
+  {(0,0.536)(1,0.621)(2,0.682)(3,0.725)(4,0.756)(5,0.765)(6,0.772)};
+\addlegendentry{A2A agent team}
 \addplot[thick, dashed, color=lftrap, mark=square*, mark size=1.5pt] coordinates
-  {(0,0.572)(1,0.657)(2,0.692)(3,0.719)(4,0.738)(5,0.753)(6,0.758)};
+  {(0,0.536)(1,0.613)(2,0.667)(3,0.704)(4,0.734)(5,0.744)(6,0.752)};
 \addlegendentry{Random search}
-\addplot[thin, gray, dotted, domain=0:6] {0.758};
+\addplot[thin, gray, dotted, domain=0:6] {0.752};
 \end{axis}
 \end{tikzpicture}
-\caption{Convergence over 12 levels. The dotted line is random search's final quality, which the
-agent loop reaches by round 4.}
+\caption{Convergence over 24 levels. The dotted line is random search's final quality; the agent
+team passes it in round 4 and the single-agent loop in round 5.}
 \label{fig:conv}
 \end{figure}
 
-\subsection{LLM vs.\ Rule-Based Design Agents}
-On the 4-level subset (Table~\ref{tab:llm}) the LLM agent won 2 of 4 levels against random search
+\subsection{Single Agent vs.\ Agent Team}
+Splitting the work across nine A2A agents did not change quality: the team scored $0.772$ against
+$0.773$ for the single-agent loop, winning 12 levels and losing 12 (Wilcoxon $p=0.886$). Per-level
+differences were large in both directions (from $-0.11$ to $+0.16$), because a different sequence of
+plans leads to a different local optimum. A team run exchanged 34.5 A2A messages per level on average.
+Reaching parity required two design decisions. Our first team version, which gave every specialist
+a fixed share of the plan slots regardless of the diagnosis, scored $0.735$ on the first 12 levels
+(11 losses out of 12). Routing each diagnosed problem to its owner, and sharing the memory of tried
+plans across specialists, closed the gap. The benefit of the team is therefore not higher quality
+but a modular system: each agent is a separate service with a narrow role, can be replaced or
+scaled independently, and can switch between LLM and rule reasoning without affecting the others.
+
+\subsection{LLM vs.\ Rule-Based Reasoning}
+In the earlier 4-level study of the single-agent loop (Table~\ref{tab:llm}) the LLM agent won 2 of 4 levels against random search
 and 2 of 4 against the rule-based agent. With 4 levels no difference is statistically detectable
 (the smallest possible two-sided sign test $p$-value is 0.125), so we report the methods as
 comparable. The LLM agent had the highest variance: the best result on two levels (0.804, 0.844)
 and the worst agent result on another (0.655).
 
 \begin{table}[t]
-\caption{LLM vs.\ rule-based reasoning (4 levels)}
+\caption{LLM vs.\ rule-based reasoning, single-agent loop (4 levels)}
 \label{tab:llm}
 \centering
 \footnotesize
@@ -505,10 +571,10 @@ Agent loop, LLM (GPT-OSS-120B) & $0.766 \pm 0.082$ \\
 
 \subsection{Case Study: Repairing a Problem Level}
 \label{sec:case}
-Fig.~\ref{fig:levels} shows a problem level before and after optimisation, and Table~\ref{tab:case}
+Fig.~\ref{fig:levels} shows a problem level before and after optimisation by the single-agent loop, and Table~\ref{tab:case}
 shows what the developer sees round by round. Only 32\% of playthroughs reached the exit (target
 71\%) and, worse for design, reckless and careful players did equally badly (31\% vs.\ 31\%), so
-skill was not rewarded. After six rounds and 11,250 simulated playthroughs (19\,s on 2 workers),
+skill was not rewarded. After six rounds and 11,250 simulated playthroughs (19\,s),
 quality rose from 0.477 to 0.895: completion 72\%, backtracking down from 12\% to 4\% of steps, and
 per-persona completion (rusher/cautious/explorer) changed from 31/31/34\% to 66/100/51\%, so careful
 play now pays off. Only 12 tiles changed, which makes the fix easy for a designer to review. The
@@ -516,6 +582,9 @@ component scores moved as follows: balance 0.45$\to$0.98, engagement 0.62$\to$0.
 0.77$\to$0.92, skill 0.02$\to$0.97 and tension 0.42$\to$0.63; tension improved least, because
 finishers still lose 59\% of their health against a target of 35\%. Fig.~\ref{fig:persona}
 shows the per-persona effect, which is the part of the result a designer is most likely to act on.
+The agent team, run on the same level with the same budget (and one injected worker crash),
+reached 0.744 with completion exactly on target (71\%); four of its five accepted plans came from the
+Difficulty Specialist. As Table~\ref{tab:main} shows, such per-level differences average out.
 
 \begin{figure}[t]
 \centering
@@ -650,11 +719,29 @@ leave some workers idle at the end of a sweep (load imbalance). We therefore cha
 small chunks (at most 8). The scaling table above used the earlier $n/4p$ setting, so it is a
 conservative estimate.
 
+\subsection{Master--Worker Cluster and Fault Tolerance}
+The explicit master--worker cluster matched the throughput of the standard process pool
+(\fillme{cluster: sims/s and speedup at 5 and 12 workers, from \texttt{benchmark\_cluster.py}}),
+so making scheduling and failure handling explicit cost no performance. Killing workers mid-job did not change any result:
+with 1 and 2 crashes per job the aggregated metrics were bit-for-bit identical to the crash-free run,
+at a cost of \fillme{extra seconds for 1 and 2 crashes} (re-running the lost chunks and starting a
+replacement process). In the agent-team case study, one crash was injected in round 2: the master
+re-queued 16 playthroughs, started worker W6, and the round completed normally.
+
+\textbf{Protocol overhead.} In a team run the A2A and MCP layers add little to the simulations:
+\fillme{protocol overhead per play-test call (ms) and median other A2A message (ms), from
+\texttt{benchmark\_cluster.py}}, against about 2--3\,s of simulation per round. Messages that do not
+trigger simulations (diagnosis, proposals, notes) are dominated by LLM latency when an API key is
+used, and the three specialists' LLM calls run in parallel.
+
 % =====================================================================
 \section{Discussion and Limitations}
 % =====================================================================
-The agent loop's main benefit over random search is efficiency: equal quality with about a third
-fewer simulations, and a modest but consistent gain at equal budget. Its accepted changes are also
+The agents' main benefit over random search is efficiency: equal quality with about a third
+fewer simulations, and a modest gain at equal budget that is consistent in direction but not
+statistically significant on 24 levels. Turning the single loop into nine A2A agents kept quality
+unchanged and bought modularity, standard interfaces (A2A, MCP) and fault tolerance; it is an
+engineering gain, not an accuracy gain. Its accepted changes are also
 interpretable (Table~\ref{tab:case}), which matters when the goal is a fix that a developer
 understands. LLM reasoning was comparable to hand-written rules but less consistent; its
 advantages are designing levels from scratch, natural-language explanations, and needing no
@@ -676,18 +763,22 @@ the quality score is a designed proxy and we do not claim it measures fun. The 4
 synthetic and the problem levels in the main study are procedurally generated stand-ins, so claims
 about real players require real reviewed levels. The twin abstracts real-time shooting into
 discrete encounters. LLM labelling varies slightly between runs, so each experiment computes the
-brief once and shares it across methods. The LLM study used only 4 levels.
+brief once and shares it across methods. The LLM study used only 4 levels, and the team was
+evaluated with rule-based reasoning; its LLM mode was used in demonstrations but not benchmarked.
+All agents ran on one machine; A2A and MCP would allow spreading them over several.
 
 % =====================================================================
 \section{Conclusion and Future Work}
 % =====================================================================
 LevelForge takes a level that players complain about, turns their reviews into measurable targets,
-and improves the level through an agentic loop backed by parallel simulated play-testing, returning
-an optimised level with an explanation the developer can learn from. Critic-guided optimisation
-beat random search at equal cost, and multicore simulation made thousands of playthroughs per run
-practical on a laptop. Future work: real reviews paired with real levels, a larger LLM study,
-learned player models, modelling shooting directly in the twin, multi-objective optimisation (e.g.\
-Pareto search) for the trade-offs the LLM struggled with, and a user study with human players.
+and improves the level with a team of nine agents that communicate over A2A, use the digital twin
+through MCP, and play-test on a fault-tolerant master--worker cluster, returning an optimised level
+with an explanation the developer can learn from. The agents reached random search's final quality
+with about a third less budget, and decomposing the work into agents preserved quality while making
+each part replaceable. Future work: real reviews paired with real levels, a larger LLM study of the
+team, running agents and workers on several machines, learned player models, modelling shooting
+directly in the twin, multi-objective optimisation for competing targets, and a user study with
+human players.
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}

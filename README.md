@@ -83,6 +83,56 @@ How to explain it: the shooter is the game; the simulator is its *digital twin*,
 turn-based model with the same level layout and the same values (health, drone health, mine
 damage, med-kit healing). All research numbers are measured on the twin.
 
+## 2b. The agent team: A2A + MCP + master-worker (main demo)
+
+`run_team.py` runs the same optimisation as a **team of 9 agents** that talk over the
+**A2A protocol**, use the digital twin through an **MCP server**, and play-test on an explicit
+**master-worker** simulation cluster.
+
+```bat
+pip install -r requirements.txt                                  :: once: adds a2a-sdk and mcp
+python run_team.py --level data\problem_level.txt                :: LLM agents (needs the Groq key)
+python run_team.py --level data\problem_level.txt --offline      :: rule-based agents, no API calls
+python run_team.py --level data\problem_level.txt --chaos        :: a simulation worker crashes in round 2
+python run_team.py --start llm                                   :: the Level Architect (LLM) designs the level
+```
+
+```
+                 you ── A2A ──► DIRECTOR (master agent, :9100)
+                                   │  discovers the others from their Agent Cards, then delegates:
+     ┌────────────┬────────────────┼──────────────┬───────────────┬──────────────┬──────────┐
+ Review       Level          Playtest       Difficulty /      QA            Reporter
+ Analyst      Architect      Analyst        Layout / Reward   Validator     (:9108)
+ (:9101)      (:9102)        (:9103)        Specialists       (:9107)
+                 │              │           (:9104-9106)         │
+                 └──── MCP ─────┴──────────────────────────────────┘
+                         levelforge-twin MCP server (:9150)
+                         validate_level, apply_edits, evaluate_levels, cluster_status, kill_worker ...
+                                   │
+                         MASTER ── W1  W2  W3  W4  W5   (simulation worker processes)
+```
+
+| Part | What it is | Code |
+|---|---|---|
+| **A2A** | Agent2Agent protocol v1.0 (official `a2a-sdk`). Every agent is its own HTTP server with an Agent Card at `/.well-known/agent-card.json`; the Director sends JSON-RPC `SendMessage` tasks and gets results back as task artifacts. | `levelforge/team/` |
+| **More agents** | Director (master) + 8 workers. The 3 specialists each own part of the problem (difficulty, layout, rewards) and are asked **in parallel**; the one that owns the top problem gets more plan slots, the QA Validator filters their plans, the Director accepts the best or rolls back. | `levelforge/team/agents.py`, `director.py` |
+| **MCP** | Model Context Protocol server (official `mcp` SDK) exposing the digital twin as 10 tools. The agents use it over HTTP; Claude Desktop can use the same server over stdio. | `levelforge/mcp_server.py`, `mcp_twin.py` |
+| **Master-worker** | The master splits each job into chunks of 8 simulations, gives each worker 2 at a time, hands out more as results come back (dynamic load balancing), watches every worker process and re-queues the work of a crashed worker on a replacement. | `levelforge/cluster.py` |
+
+Outputs go to `outputs_team\`: `report.html` now has an **Agent team** section (agent cards, the
+A2A message trace per round, simulations per worker per round, crashes survived), plus
+`logs\` (one log per agent and for the MCP server) and `team_result.json`.
+
+**Fault-tolerance demo, live:** while `run_team.py` is running, open a second terminal and run
+`python kill_worker.py`. The run prints the crash, the re-queued simulations and the replacement
+worker, and finishes with exactly the same numbers.
+
+**Use the MCP server from Claude Desktop:** copy the block from `mcp_config_example.json` into
+Claude Desktop's config file (Settings > Developer > Edit Config), restart Claude Desktop, then ask:
+*"Use levelforge-twin to evaluate this level and improve it"* and paste a level grid.
+
+If a port is busy (another run still open), close it or use `--base-port 9200 --mcp-port 9250`.
+
 ## 3. Turn on the LLM (optional but recommended for the GenAI marks)
 
 Without a key everything still runs, using rule-based agents. With a free Groq key
@@ -144,11 +194,26 @@ python run_demo.py --out outputs_llm          (LLM also designs the first level)
 
 ### The paper (IEEE format, LaTeX)
 
-- `paper\LevelForge_paper.pdf`: the compiled paper (7 pages, IEEE conference two-column).
+- `paper\LevelForge_paper.pdf`: the compiled paper (8 pages, IEEE conference two-column).
 - `paper\LevelForge_paper_overleaf.zip`: upload to Overleaf (New Project > Upload Project), then Recompile.
 - `paper\latex\`: the same sources (`main.tex`, `refs.bib`, figures). Text in **red** inside `[...]` still
-  needs your details (team names, emails, CPU, cores, RAM, Python version).
+  needs your details (team names, emails, CPU, cores, RAM, Python version) or numbers from
+  `python benchmark_cluster.py` (run `python run_team.py --offline --level data\problem_level.txt` first,
+  so the benchmark can also measure the A2A/MCP overhead).
 - `paper\paper_draft.md` is the older plain-text draft; the LaTeX version is the one to submit.
+
+## 4b. CI/CD: tests, website, teamwork
+
+`.github/workflows/ci-cd.yml` runs on GitHub Actions:
+
+| Trigger | What happens |
+|---|---|
+| every push / pull request | `pytest` on Linux and Windows: digital twin, master-worker crash recovery, MCP tools, and full offline runs of `run_demo.py` and `run_team.py` |
+| merge to `main` | `scripts/build_site.py` builds a website (3D game, single-agent and agent-team reports, agent map, paper) and deploys it to GitHub Pages |
+
+Run the same checks locally with `pip install pytest` then `python -m pytest -q`, and build the site
+with `python scripts/build_site.py` (writes `site/`). How the team works with branches and pull
+requests: see `CONTRIBUTING.md`.
 
 ## 5. Where each requirement lives
 
@@ -159,6 +224,9 @@ python run_demo.py --out outputs_llm          (LLM also designs the first level)
 | **MCA / HPC** | Embarrassingly parallel Monte-Carlo play-testing on a process pool; all candidates batched into one parallel sweep; chunked task dispatch; scaling benchmark | `levelforge/parallel.py`, `benchmark.py` |
 | **Digital twin** | Grid level model + turn-based simulator + three bot personas | `levelforge/level.py`, `simulator.py` |
 | **Research** | Quality metric, baselines, sign test, convergence curves | `levelforge/metrics.py`, `experiments.py` |
+| **A2A multi-agent** | Director + 8 worker agents as A2A servers | `levelforge/team/`, `run_team.py` |
+| **MCP** | Digital twin as MCP tools (HTTP for the team, stdio for Claude Desktop) | `levelforge/mcp_server.py`, `mcp_twin.py` |
+| **Master-worker** | Explicit master with dynamic scheduling and crash recovery | `levelforge/cluster.py`, `kill_worker.py` |
 
 ## 6. Project layout
 
@@ -174,6 +242,13 @@ levelforge/
   llm.py         Groq / Gemini client (stdlib only) with offline mode
   agents.py      LangGraph agent loop
   report.py      self-contained HTML report
+  cluster.py     master-worker simulation cluster (dynamic scheduling, crash recovery)
+  mcp_server.py  digital twin as an MCP server (10 tools)
+  team/          A2A agent team: a2a_kit.py (A2A server/client), agents.py (8 workers),
+                 director.py (master agent), runtime.py (starts/stops everything), serve.py
+run_team.py      agent team demo (A2A + MCP + master-worker)
+kill_worker.py   crash a simulation worker during a team run
+mcp_twin.py      MCP server entry point for Claude Desktop
 run_demo.py      full demo
 benchmark.py     multicore scaling benchmark
 experiments.py   agent vs baselines

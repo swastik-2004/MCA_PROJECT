@@ -52,6 +52,12 @@ button.on{border-color:var(--acc);color:var(--acc)}.row{display:flex;flex-wrap:w
 .notes{border-left:3px solid var(--acc);padding:4px 14px;color:#cfd5df}
 details summary{cursor:pointer;color:var(--muted)}
 .status{font-variant-numeric:tabular-nums;color:var(--muted)}
+.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.agent{background:#11141a;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.agent b{display:block;font-size:14px}.agent .u{color:var(--muted);font-size:12px}.agent.master{border-color:var(--acc)}
+.wbar{display:flex;height:16px;border-radius:5px;overflow:hidden;background:#11141a;margin:3px 0;flex:1}
+.wbar i{display:block;height:100%;border-right:1px solid #0f1115}.crash{color:var(--bad);font-size:12.5px}
+.mcp{color:#d39cff}
 </style></head><body><main>
 <h1>__TITLE__</h1>
 <div class="sub" id="sub"></div>
@@ -67,6 +73,12 @@ details summary{cursor:pointer;color:var(--muted)}
 <div><h3>Quality components: initial vs final</h3><div id="comp"></div></div></div>
 <h3>Rounds</h3><table id="rounds"></table>
 <details><summary>Full agent trace</summary><pre id="log"></pre></details></section>
+
+<section id="teamsec" style="display:none"><h2>Agent team: A2A messages, MCP tools, master&ndash;worker cluster</h2>
+<div class="sub" id="teamsub" style="margin-bottom:8px"></div>
+<h3>Agents (discovered from their A2A Agent Cards)</h3><div class="agents" id="agents"></div>
+<div class="grid2"><div><h3>Simulations per worker, per round (master&ndash;worker)</h3><div id="cluster"></div></div>
+<div><h3>Message trace</h3><div class="row"><select id="trnd"></select></div><table id="trace"></table></div></div></section>
 
 <section><h2>3. Before and after</h2>
 <div class="legend" id="legend"></div>
@@ -131,9 +143,36 @@ $('comp').innerHTML = ['balance','engagement','flow','skill','tension'].map(k=>{
   return `<div class="bar"><div class="lab">${k}</div><div class="track" style="position:relative"><div class="fill" style="width:${a*100}%;background:#59606e"></div></div><div class="track"><div class="fill" style="width:${z*100}%"></div></div><div class="val">${a.toFixed(2)}→${z.toFixed(2)}</div></div>`}).join('')+
   '<div class="legend"><span><i style="background:#59606e"></i>initial</span><span><i style="background:#7cc4ff"></i>final</span></div>';
 $('rounds').innerHTML = '<tr><th>Round</th><th>Candidates (plan &rarr; score)</th><th>Decision</th><th class="num">Best</th><th class="num">Sim time</th></tr>'+
- H.map(h=>`<tr><td>R${h.round}</td><td>${h.candidates.map(c=>`${esc(c.plan)} &rarr; <b>${f3(c.quality.total)}</b>`).join('<br>')}</td>
+ H.map(h=>`<tr><td>R${h.round}</td><td>${h.candidates.map(c=>`${c.agent?`<span class="tag">${esc(c.agent)}</span> `:''}${esc(c.plan)} &rarr; <b>${f3(c.quality.total)}</b>`).join('<br>')}</td>
  <td><span class="tag ${h.decision==='accepted'?'ok':'no'}">${esc(h.decision)}</span></td><td class="num">${f3(h.best_score)}</td><td class="num">${(+h.sweep_seconds).toFixed(2)}s</td></tr>`).join('');
 $('log').textContent = D.log.join('\n');
+
+// agent team (only for run_team.py runs)
+if (D.team) {
+  const T = D.team; $('teamsec').style.display='';
+  const msgs = T.a2a_trace.length, mcpN = T.a2a_trace.reduce((a,t)=>a+t.mcp.length,0);
+  $('teamsub').textContent = `${T.agents.length+1} agents, ${msgs} A2A messages, ${mcpN} MCP tool calls, `+
+    `${T.worker_failures} simulation-worker crash(es) survived, ${T.seconds}s in total.`;
+  const cnt = {}, acc = {};
+  T.a2a_trace.forEach(t=>cnt[t.to]=(cnt[t.to]||0)+1);
+  H.forEach(h=>{ if(h.accepted_agent) acc[h.accepted_agent]=(acc[h.accepted_agent]||0)+1; });
+  $('agents').innerHTML = `<div class="agent master"><b>Director (master agent)</b><span class="u">sent ${msgs} messages</span><br>plans each round, delegates, accepts or rolls back</div>`+
+    T.agents.map(a=>`<div class="agent"><b>${esc(a.name)}</b><span class="u">${esc(a.url)} · skills: ${esc(a.skills.join(', '))}</span><br>${cnt[a.name]||0} task${cnt[a.name]===1?'':'s'} received`+
+    (acc[a.name]?` · <span class="up">${acc[a.name]} plan(s) accepted</span>`:'')+`</div>`).join('');
+  const pal=['#7cc4ff','#6fd39b','#ffc46b','#d39cff','#ff9db0','#9ee6e6','#c7d38b','#f5a76c'];
+  const wid = {}; let nw=0;
+  $('cluster').innerHTML = H.map(h=>{ const j=h.cluster_job||{}, pw=j.per_worker_sims||{}, tot=Object.values(pw).reduce((a,b)=>a+b,0)||1;
+    const bars = Object.entries(pw).map(([w,n])=>{ if(!(w in wid)) wid[w]=pal[nw++%pal.length];
+      return `<i title="${w}: ${n} sims" style="width:${100*n/tot}%;background:${wid[w]}"></i>`}).join('');
+    const ev=(j.events||[]).map(e=>`<div class="crash">W${e.worker} crashed → ${e.requeued_sims} sims re-queued → W${e.replacement} started</div>`).join('');
+    return `<div class="row" style="margin:2px 0"><span style="width:34px;color:var(--muted)">R${h.round}</span><div class="wbar">${bars}</div><span class="status" style="width:130px;text-align:right;white-space:nowrap;font-size:12.5px">${j.sims||0} sims · ${(+j.seconds||0).toFixed(1)}s</span></div>${ev}`}).join('')+
+    `<div class="legend" style="margin-top:6px">${Object.entries(wid).map(([w,c])=>`<span><i style="background:${c}"></i>${w}</span>`).join('')}</div>`;
+  const rounds=[...new Set(T.a2a_trace.map(t=>t.round))];
+  $('trnd').innerHTML = rounds.map(r=>`<option value="${r}">${r===0?'Setup (round 0)':(r>=H.length?'Report':'Round '+r)}</option>`).join('');
+  const showTrace = r => { $('trace').innerHTML = '<tr><th>#</th><th>A2A message</th><th>skill</th><th>MCP tools used</th><th class="num">ms</th></tr>'+
+    T.a2a_trace.filter(t=>t.round==r).map((t,i)=>`<tr><td>${i+1}</td><td>${esc(t.from)} → <b>${esc(t.to)}</b></td><td>${esc(t.skill)}</td><td class="mcp">${esc([...new Set(t.mcp)].join(', '))}</td><td class="num">${t.ms}</td></tr>`).join(''); };
+  $('trnd').onchange = e => showTrace(+e.target.value); showTrace(rounds[Math.min(1,rounds.length-1)]); $('trnd').value = rounds[Math.min(1,rounds.length-1)];
+}
 
 // 3. level drawing
 const COL={'#':'#2a2f3a','.':'#151922','S':'#3b82f6','E':'#22c55e','K':'#facc15','D':'#a16207','M':'#ef4444','T':'#c084fc','H':'#f472b6','C':'#fbbf24'};

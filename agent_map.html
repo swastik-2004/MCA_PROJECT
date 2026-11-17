@@ -1,0 +1,382 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0">
+<title>LevelForge Agent Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one wide diagram in three stacked layers (A2A agents / MCP tools / master-worker cluster),
+   with a step-through narration card and an agent detail card underneath. */
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --ink: #18202c;
+  --muted: #5a6475;
+  --line: #d3d9e2;
+  --a2a: #2c66d8;
+  --mcp: #17895c;
+  --mw: #c96a12;
+  --alert: #cf3b3b;
+  --dim: 0.22;
+  --f-display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1218; --panel: #161c25; --ink: #e5e9f1; --muted: #97a1b2; --line: #2a3341;
+    --a2a: #6b9dff; --mcp: #3cc28c; --mw: #f0973f; --alert: #ff6b6b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1218; --panel: #161c25; --ink: #e5e9f1; --muted: #97a1b2; --line: #2a3341;
+  --a2a: #6b9dff; --mcp: #3cc28c; --mw: #f0973f; --alert: #ff6b6b; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--f-body); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 18px; }
+header { display: grid; gap: 6px; }
+h1 { font: 700 clamp(26px, 4vw, 36px)/1.1 var(--f-display); margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.lede { margin: 0; color: var(--muted); max-width: 70ch; }
+.layers { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; }
+.layers span { display: inline-flex; align-items: center; gap: 8px; }
+.layers i { width: 26px; height: 0; border-top: 3px solid; display: inline-block; }
+.layers .l-a2a i { border-color: var(--a2a); }
+.layers .l-mcp i { border-color: var(--mcp); border-top-style: dashed; }
+.layers .l-mw i { border-color: var(--mw); }
+
+.diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 820px; height: auto; }
+svg text { fill: var(--ink); font-family: var(--f-body); }
+.band-title { font: 600 13px var(--f-display); letter-spacing: .12em; text-transform: uppercase; }
+.band-a .band-title { fill: var(--a2a); } .band-b .band-title { fill: var(--mcp); } .band-c .band-title { fill: var(--mw); }
+.band rect { fill: none; stroke: var(--line); stroke-dasharray: 2 6; }
+
+.node rect { stroke-width: 1.6; transition: opacity .25s, stroke-width .25s; }
+.node .name { font: 700 15px var(--f-display); }
+.node .role { font-size: 12px; fill: var(--muted); }
+.node.agent rect { fill: color-mix(in srgb, var(--a2a) 10%, var(--panel)); stroke: color-mix(in srgb, var(--a2a) 55%, var(--line)); }
+.node.director rect { fill: color-mix(in srgb, var(--a2a) 18%, var(--panel)); stroke: var(--a2a); stroke-width: 2.4; }
+.node.io rect { fill: color-mix(in srgb, var(--ink) 5%, var(--panel)); stroke: var(--line); }
+.node.mcp rect { fill: color-mix(in srgb, var(--mcp) 12%, var(--panel)); stroke: var(--mcp); }
+.node.mw rect { fill: color-mix(in srgb, var(--mw) 13%, var(--panel)); stroke: var(--mw); }
+.node.worker rect { fill: var(--panel); stroke: var(--mw); }
+.node.dead rect { stroke: var(--alert); stroke-dasharray: 4 3; }
+.node.dead .name { fill: var(--alert); }
+.node { cursor: pointer; }
+.node:focus-visible rect, .node.picked rect { stroke-width: 3.4; }
+.mono { font-family: var(--f-mono); font-size: 11.5px; fill: var(--muted); }
+
+.edge { fill: none; stroke-width: 2; transition: opacity .25s; }
+.edge.a2a { stroke: var(--a2a); }
+.edge.mcp { stroke: var(--mcp); stroke-dasharray: 6 5; }
+.edge.mw { stroke: var(--mw); }
+.edge-label { font: 600 11px var(--f-mono); }
+.edge-label.a2a { fill: var(--a2a); } .edge-label.mcp { fill: var(--mcp); } .edge-label.mw { fill: var(--mw); }
+
+/* focus mode: when a step is active everything not involved is dimmed */
+svg.focus .node:not(.on), svg.focus .edge:not(.on), svg.focus .edge-label:not(.on) { opacity: var(--dim); }
+svg.focus .edge.on { stroke-width: 3.2; }
+.pulse { fill: var(--ink); }
+.crashmark { fill: var(--alert); font: 700 20px var(--f-display); }
+
+.below { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 860px) { .below { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.eyebrow { font: 600 12px var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.card h2 { font: 700 21px/1.25 var(--f-display); margin: 0; text-wrap: balance; }
+.say { margin: 0; padding: 10px 14px; border-left: 3px solid var(--a2a); background: color-mix(in srgb, var(--a2a) 7%, var(--panel)); border-radius: 0 6px 6px 0; }
+.say b { font-family: var(--f-display); font-weight: 600; letter-spacing: .04em; }
+.detail { margin: 0; color: var(--muted); font-size: 15px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: 600 14px var(--f-display); letter-spacing: .04em; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 7px; padding: 8px 14px; cursor: pointer; }
+button.primary { background: var(--a2a); border-color: var(--a2a); color: var(--panel); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible { outline: 3px solid color-mix(in srgb, var(--a2a) 45%, transparent); outline-offset: 2px; }
+.dots { display: flex; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+.dots button { width: 26px; height: 26px; padding: 0; font: 600 11px var(--f-mono); border-radius: 50%; }
+.dots button.cur { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 15px; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+code { font-family: var(--f-mono); font-size: 13px; background: color-mix(in srgb, var(--ink) 7%, var(--panel)); padding: 1px 5px; border-radius: 4px; }
+.gloss { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.gloss div { display: grid; gap: 4px; }
+.gloss b { font-family: var(--f-display); font-size: 16px; }
+.gloss .k-a2a { color: var(--a2a); } .gloss .k-card { color: var(--a2a); } .gloss .k-mcp { color: var(--mcp); } .gloss .k-mw { color: var(--mw); }
+.gloss p { margin: 0; color: var(--muted); font-size: 15px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>LevelForge Agent Map</h1>
+    <p class="lede">Nine agents fix a game level together. Press <b>Next</b> to walk through one optimisation round, or click any box to see what it does.</p>
+    <div class="layers" aria-label="Line styles">
+      <span class="l-a2a"><i></i>A2A: agents send each other tasks</span>
+      <span class="l-mcp"><i></i>MCP: agents call the digital-twin tools</span>
+      <span class="l-mw"><i></i>Master–worker: simulations spread over CPU cores</span>
+    </div>
+  </header>
+
+  <div class="diagram">
+    <svg id="map" viewBox="0 0 1200 800" role="img" aria-label="Diagram of the LevelForge agents and how they connect">
+      <defs>
+        <marker id="ar-a2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--a2a)"/></marker>
+        <marker id="ar-mcp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--mcp)"/></marker>
+        <marker id="ar-mw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--mw)"/></marker>
+      </defs>
+      <g class="band band-a"><rect x="12" y="12" width="1176" height="420" rx="10"/><text class="band-title" x="30" y="38">Layer 1 · Agents talk over A2A</text></g>
+      <g class="band band-b"><rect x="12" y="446" width="1176" height="126" rx="10"/><text class="band-title" x="1170" y="472" text-anchor="end">Layer 2 · Tools over MCP</text></g>
+      <g class="band band-c"><rect x="12" y="586" width="1176" height="202" rx="10"/><text class="band-title" x="1170" y="612" text-anchor="end">Layer 3 · Master–worker simulation cluster</text></g>
+      <g id="edges"></g>
+      <g id="labels"></g>
+      <g id="nodes"></g>
+      <circle id="pulse" class="pulse" r="6" cx="-20" cy="-20"/>
+    </svg>
+  </div>
+
+  <div class="below">
+    <section class="card" aria-live="polite">
+      <div class="eyebrow" id="stepNo">Overview</div>
+      <h2 id="stepTitle"></h2>
+      <p class="say"><b>Say:</b> <span id="stepSay"></span></p>
+      <p class="detail" id="stepDetail"></p>
+      <div class="controls">
+        <button id="prev" type="button">Back</button>
+        <button id="next" type="button" class="primary">Next</button>
+        <button id="play" type="button">Play all</button>
+        <div class="dots" id="dots" aria-label="Jump to step"></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="eyebrow">Selected box</div>
+      <h2 id="agName">Director</h2>
+      <p class="detail" id="agWhat"></p>
+      <dl id="agFacts"></dl>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="eyebrow">The four words to explain</div>
+    <div class="gloss">
+      <div><b class="k-a2a">A2A (Agent2Agent)</b><p>An open protocol for agents to send each other tasks over the network, like messaging between team members. Each of our agents is its own small server.</p></div>
+      <div><b class="k-card">Agent Card</b><p>Each agent's public ID card: its name, what it can do (skills) and its address. The Director reads the cards to find the team.</p></div>
+      <div><b class="k-mcp">MCP (Model Context Protocol)</b><p>A standard plug for AI tools. Our digital twin is one MCP server with 10 tools, so any agent, or Claude Desktop, can use it.</p></div>
+      <div><b class="k-mw">Master–worker</b><p>A boss process splits the simulations into small chunks and hands them to worker processes. If a worker crashes, its work is redone by a replacement.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+// ---------------------------------------------------------------- boxes
+const W = 128, GAP = 16, ROWX = 32, ROWY = 250, ROWH = 92;
+const workers = [
+  ["review", "Review", "Analyst", "reviews → brief"],
+  ["architect", "Level", "Architect", "load or design level"],
+  ["playtest", "Playtest", "Analyst", "play-test, diagnose"],
+  ["difficulty", "Difficulty", "Specialist", "monsters, traps"],
+  ["layout", "Layout", "Specialist", "loops, locks"],
+  ["reward", "Reward", "Specialist", "coins, side rewards"],
+  ["qa", "QA", "Validator", "apply + check plans"],
+  ["reporter", "Reporter", "", "designer notes"],
+];
+const N = {};  // id -> {x,y,w,h,cls,lines,role}
+N.input = { x: 32, y: 66, w: 190, h: 78, cls: "io", lines: ["Input"], role: "problem level + reviews" };
+N.director = { x: 440, y: 56, w: 320, h: 98, cls: "agent director", lines: ["Director"], role: "master agent: plans, routes, decides" };
+N.developer = { x: 978, y: 66, w: 190, h: 78, cls: "io", lines: ["Developer"], role: "level, notes, report, 3D game" };
+workers.forEach(([id, a, b, role], i) => {
+  N[id] = { x: ROWX + i * (W + GAP), y: ROWY, w: W, h: ROWH, cls: "agent", lines: b ? [a, b] : [a], role };
+});
+N.mcp = { x: 150, y: 490, w: 900, h: 66, cls: "mcp", lines: ["MCP server: levelforge-twin"], role: "validate_level · apply_edits · evaluate_levels · cluster_status · kill_worker · +5 more" };
+N.master = { x: 140, y: 650, w: 200, h: 78, cls: "mw", lines: ["Master"], role: "chunks of 8, queue, re-queue" };
+for (let i = 1; i <= 6; i++) {
+  N["w" + i] = { x: 410 + (i - 1) * 118, y: 660, w: 96, h: 58, cls: "mw worker", lines: ["W" + i], role: i === 6 ? "replacement" : "3 player bots" };
+}
+const cx = n => N[n].x + N[n].w / 2, cy = n => N[n].y + N[n].h / 2;
+
+// ---------------------------------------------------------------- lines
+const E = {};  // id -> {d, kind, label, lx, ly}
+E["input-director"] = { d: `M222,105 H440`, kind: "a2a", label: "A2A task", lx: 331, ly: 96 };
+E["director-developer"] = { d: `M760,105 H978`, kind: "a2a", label: "result", lx: 869, ly: 96 };
+workers.forEach(([id], i) => {
+  const x2 = cx(id), y1 = 154, y2 = ROWY;
+  const x1 = 600 + (x2 - 600) * 0.18;
+  E["director-" + id] = { d: `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`, kind: "a2a" };
+});
+["architect", "playtest", "qa"].forEach(id => {
+  E[id + "-mcp"] = { d: `M${cx(id)},${ROWY + ROWH} V490`, kind: "mcp", label: "MCP", lx: cx(id) + 8, ly: 418 };
+});
+E["mcp-master"] = { d: `M240,556 V650`, kind: "mw", label: "evaluate_levels", lx: 250, ly: 604 };
+for (let i = 1; i <= 6; i++) {
+  const x2 = cx("w" + i);
+  E["master-w" + i] = { d: `M340,689 H372 V632 H${x2} V660`, kind: "mw" };
+}
+
+const svg = document.getElementById("map");
+const gE = document.getElementById("edges"), gL = document.getElementById("labels"), gN = document.getElementById("nodes");
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+for (const id in E) {
+  const e = E[id];
+  e.el = el("path", { d: e.d, class: `edge ${e.kind}`, id: "e-" + id, "marker-end": `url(#ar-${e.kind})` }, gE);
+  if (e.label) {
+    e.lab = el("text", { x: e.lx, y: e.ly, class: `edge-label ${e.kind}` }, gL);
+    e.lab.textContent = e.label;
+  }
+}
+for (const id in N) {
+  const n = N[id];
+  const g = el("g", { class: `node ${n.cls}`, id: "n-" + id, tabindex: "0", role: "button", "aria-label": n.lines.join(" ") }, gN);
+  el("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 8 }, g);
+  const lineH = 18, total = n.lines.length * lineH + 16;
+  let ty = n.y + (n.h - total) / 2 + 15;
+  n.lines.forEach(t => { const tx = el("text", { x: n.x + n.w / 2, y: ty, "text-anchor": "middle", class: "name" }, g); tx.textContent = t; ty += lineH; });
+  const r = el("text", { x: n.x + n.w / 2, y: ty + 4, "text-anchor": "middle", class: id === "mcp" ? "mono" : "role" }, g);
+  r.textContent = n.role;
+  n.g = g;
+  g.addEventListener("click", () => pick(id));
+  g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(id); } });
+}
+N.w6.g.style.display = "none"; E["master-w6"].el.style.display = "none";
+const crash = el("text", { x: cx("w3") - 7, y: 652, class: "crashmark" }, gN); crash.textContent = "✕"; crash.style.display = "none";
+
+// ---------------------------------------------------------------- agent facts
+const INFO = {
+  input: ["The developer's input", "A level that players complained about, plus the player reviews of that level.", [["Sent as", "one A2A task to the Director"], ["File", "<code>data/problem_level.txt</code>"]]],
+  director: ["Director (master agent)", "Does none of the specialist work itself. It finds the other agents, gives each its job, keeps the best level and remembers what failed.", [["A2A skill", "<code>optimise_level</code>"], ["Decides", "accept the best candidate or roll back"], ["Memory", "failed priorities + plans already tried"], ["Port", "9100"]]],
+  developer: ["What the developer gets", "The optimised level, designer notes explaining each change, an HTML report with the full agent trace, and the level inside the 3D game.", [["Report", "<code>outputs_team/report.html</code>"], ["Game", "<code>python play.py</code>"]]],
+  review: ["Review Analyst", "Reads the player reviews, labels each with design problems, and turns the counts into targets.", [["A2A skill", "<code>build_brief</code>"], ["Reasoning", "LLM (keywords if offline)"], ["Example", "too hard 23% → aim for 71% completion"], ["Port", "9101"]]],
+  architect: ["Level Architect", "Provides the starting level: loads the complained-about level, or the LLM designs one from the brief.", [["A2A skill", "<code>initial_level</code>"], ["MCP tools", "<code>validate_level</code>, <code>generate_level</code>"], ["Reasoning", "LLM or rules"], ["Port", "9102"]]],
+  playtest: ["Playtest Analyst", "Sends levels to be play-tested by hundreds of simulated players, then diagnoses what is wrong.", [["A2A skills", "<code>playtest</code>, <code>diagnose</code>"], ["MCP tool", "<code>evaluate_levels</code> → cluster"], ["Example", "too_hard: only 32% finish"], ["Port", "9103"]]],
+  difficulty: ["Difficulty Specialist", "Owns completion rate and damage. May only add or remove monsters, traps and potions.", [["A2A skill", "<code>propose</code>"], ["Owns", "too_hard, too_easy, low/high tension"], ["Reasoning", "LLM or rules"], ["Port", "9104"]]],
+  layout: ["Layout Specialist", "Owns flow and skill. May open shortcuts, add or remove locks, and move hazards on or off the main route.", [["A2A skill", "<code>propose</code>"], ["Owns", "backtracking, low skill expression"], ["Reasoning", "LLM or rules"], ["Port", "9105"]]],
+  reward: ["Reward Specialist", "Owns engagement. May place coins and side-area potions so explorers are rewarded.", [["A2A skill", "<code>propose</code>"], ["Owns", "low engagement, fine-tuning"], ["Reasoning", "LLM or rules"], ["Port", "9106"]]],
+  qa: ["QA Validator", "Turns each plan into a real candidate level and throws out plans that change nothing or duplicate another.", [["A2A skill", "<code>validate_plans</code>"], ["MCP tool", "<code>apply_edits</code>"], ["Guarantee", "every candidate is playable"], ["Port", "9107"]]],
+  reporter: ["Reporter", "Writes short designer notes explaining what changed and why, for the developer.", [["A2A skill", "<code>write_notes</code>"], ["Reasoning", "LLM (template if offline)"], ["Port", "9108"]]],
+  mcp: ["MCP server: levelforge-twin", "The digital twin as 10 standard tools. Our agents call it over HTTP; Claude Desktop can call the same server.", [["Tools", "<code>validate_level</code> <code>generate_level</code> <code>repair_level</code> <code>apply_edits</code> <code>level_summary</code> <code>evaluate_levels</code> <code>cluster_status</code> <code>kill_worker</code> <code>inject_fault</code> <code>get_rules</code>"], ["Port", "9150"]]],
+  master: ["Master", "Splits each job into chunks of 8 playthroughs, gives each worker 2 at a time, and sends more as results come back. Watches every worker; a crashed worker's chunks are re-queued.", [["Scheduling", "dynamic: fast workers take more"], ["On crash", "re-queue + start replacement"], ["Result", "identical, every run is seeded"]]],
+};
+for (let i = 1; i <= 6; i++) INFO["w" + i] = [`Worker W${i}`, i === 6 ? "Started by the master to replace a crashed worker." : "A separate Python process. It receives a chunk of playthroughs, simulates the three player types and sends the results back.", [["Player types", "rusher, cautious, explorer"], ["Typical job", "1,800 playthroughs per round, shared by 5 workers"]]];
+
+function pick(id) {
+  document.querySelectorAll(".node.picked").forEach(n => n.classList.remove("picked"));
+  N[id].g.classList.add("picked");
+  const [name, what, facts] = INFO[id];
+  document.getElementById("agName").textContent = name;
+  document.getElementById("agWhat").textContent = what;
+  document.getElementById("agFacts").innerHTML = facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+// ---------------------------------------------------------------- the walk-through
+const allW = ["w1", "w2", "w3", "w4", "w5"];
+const masterEdges = allW.map(w => "master-" + w);
+const STEPS = [
+  { t: "Three layers, nine agents", say: "We split the job across nine agents. They talk to each other with A2A, they use the game's digital twin through MCP, and the heavy simulation runs on a master–worker cluster.",
+    d: "Blue boxes are agents, each running as its own small server. The green box is the tool server. The orange boxes are the CPU processes that run the simulated players.", nodes: null, edges: null, flow: [] },
+  { t: "The developer sends the problem level", say: "The developer gives the Director the level players complained about, plus their reviews, as one A2A task.",
+    d: "This is the same idea as our teacher pitch: take the complained-about level and sandbox it.", nodes: ["input", "director"], edges: ["input-director"], flow: ["input-director"] },
+  { t: "The Director finds its team", say: "The Director reads each agent's Agent Card, which is like an ID card listing its name, skills and address.",
+    d: "Nothing is hard-wired: if an agent's card says it can do a skill, the Director can send it that task.", nodes: ["director", ...workers.map(w => w[0])], edges: workers.map(w => "director-" + w[0]), flow: [] },
+  { t: "Reviews become targets", say: "The Review Analyst reads the reviews. 'Too hard' was the top complaint, so the target is that 71% of players finish.",
+    d: "This is the GenAI part: the LLM labels each review with design problems.", nodes: ["director", "review"], edges: ["director-review"], flow: ["director-review"] },
+  { t: "Load the level and check it", say: "The Level Architect loads the problem level and asks the MCP server whether it is playable.",
+    d: "It could also ask the LLM to design a brand-new level from the brief.", nodes: ["director", "architect", "mcp"], edges: ["director-architect", "architect-mcp"], flow: ["director-architect", "architect-mcp"] },
+  { t: "Measure how bad it is", say: "The Playtest Analyst asks MCP to play the level 450 times. The master spreads those playthroughs over five worker processes.",
+    d: "Baseline: only 32% of simulated players reach the exit, against a target of 71%.", nodes: ["director", "playtest", "mcp", "master", ...allW], edges: ["director-playtest", "playtest-mcp", "mcp-master", ...masterEdges], flow: ["director-playtest", "playtest-mcp", "mcp-master", "master-w1"] },
+  { t: "Diagnose the problems", say: "Each round starts with a diagnosis: the level is too hard, careful players do no better than reckless ones, and finishers lose too much health.",
+    d: "The Director also remembers which problems it already failed to fix, and moves on to another one.", nodes: ["director", "playtest"], edges: ["director-playtest"], flow: ["director-playtest"] },
+  { t: "Route each problem to its owner", say: "The Director sends each problem to the specialist that owns it, in parallel: two plans from Difficulty, one each from Layout and Reward.",
+    d: "Each specialist may only use its own edits. The Reward Specialist cannot add monsters, so its ideas stay on-topic.", nodes: ["director", "difficulty", "layout", "reward"], edges: ["director-difficulty", "director-layout", "director-reward"], flow: ["director-difficulty", "director-layout", "director-reward"] },
+  { t: "QA turns plans into levels", say: "The QA Validator applies every plan through MCP and rejects plans that change nothing or duplicate another.",
+    d: "The AI never edits the map directly. It picks structured edits, and the tools apply and validate them, so every candidate stays playable.", nodes: ["director", "qa", "mcp"], edges: ["director-qa", "qa-mcp"], flow: ["director-qa", "qa-mcp"] },
+  { t: "Play-test all candidates at once", say: "All four candidates go out as one job: 1,800 simulated playthroughs, shared by five workers. Fast workers simply take more chunks.",
+    d: "Every candidate uses the same random seeds, so differences in score come from the level, not from luck.", nodes: ["director", "playtest", "mcp", "master", ...allW], edges: ["director-playtest", "playtest-mcp", "mcp-master", ...masterEdges], flow: ["director-playtest", "playtest-mcp", "mcp-master", "master-w3"] },
+  { t: "A worker crashes, nothing is lost", say: "If a worker dies, the master puts its unfinished chunks back in the queue and starts a replacement. The final numbers are exactly the same.",
+    d: "Demo: run python kill_worker.py in a second terminal during a run, or start with --chaos.", nodes: ["master", "w1", "w2", "w3", "w4", "w5", "w6"], edges: ["master-w1", "master-w2", "master-w4", "master-w5", "master-w6"], flow: ["master-w6"], crash: true },
+  { t: "The Director decides", say: "The Director keeps the best candidate if it beats the current level. Otherwise it rolls back and remembers that the fix failed.",
+    d: "Then the next round starts from step 7. A full run is six rounds.", nodes: ["director"], edges: [], flow: [] },
+  { t: "Report to the developer", say: "At the end the Reporter writes designer notes, and the developer gets the fixed level, the explanation, a report and the 3D game.",
+    d: "On the problem level: completion went from 32% to 71%, exactly the target.", nodes: ["director", "reporter", "developer"], edges: ["director-reporter", "director-developer"], flow: ["director-reporter", "director-developer"] },
+];
+
+let cur = 0, playing = null, anim = null;
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const dots = document.getElementById("dots");
+STEPS.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = i === 0 ? "•" : i; b.setAttribute("aria-label", i === 0 ? "Overview" : "Step " + i);
+  b.addEventListener("click", () => { stop(); show(i); });
+  dots.appendChild(b);
+});
+
+function show(i) {
+  cur = i;
+  const s = STEPS[i];
+  document.getElementById("stepNo").textContent = i === 0 ? "Overview" : `Step ${i} of ${STEPS.length - 1}`;
+  document.getElementById("stepTitle").textContent = s.t;
+  document.getElementById("stepSay").textContent = s.say;
+  document.getElementById("stepDetail").textContent = s.d;
+  [...dots.children].forEach((b, k) => b.classList.toggle("cur", k === i));
+  document.getElementById("prev").disabled = i === 0;
+  document.getElementById("next").textContent = i === STEPS.length - 1 ? "Start over" : "Next";
+  const focus = !!s.nodes;
+  svg.classList.toggle("focus", focus);
+  for (const id in N) N[id].g.classList.toggle("on", focus && s.nodes.includes(id));
+  for (const id in E) {
+    const on = focus && s.edges.includes(id);
+    E[id].el.classList.toggle("on", on);
+    if (E[id].lab) E[id].lab.classList.toggle("on", on);
+  }
+  const crashed = !!s.crash;
+  N.w3.g.classList.toggle("dead", crashed);
+  crash.style.display = crashed ? "" : "none";
+  N.w6.g.style.display = crashed ? "" : "none";
+  E["master-w6"].el.style.display = crashed ? "" : "none";
+  if (s.nodes && s.nodes.length < 6) pick(s.nodes[s.nodes.length - 1]);
+  else if (i === 0) pick("director");
+  runFlow(s.flow);
+}
+
+function runFlow(ids) {
+  const p = document.getElementById("pulse");
+  if (anim) cancelAnimationFrame(anim);
+  p.setAttribute("cx", -20); p.setAttribute("cy", -20);
+  if (reduce || !ids.length) return;
+  const paths = ids.map(id => E[id].el), lens = paths.map(x => x.getTotalLength());
+  const speed = 0.55; // px per ms
+  let k = 0, t0 = performance.now();
+  const tick = now => {
+    const d = (now - t0) * speed;
+    if (d >= lens[k]) { k++; t0 = now; if (k >= paths.length) { p.setAttribute("cx", -20); return; } }
+    const pt = paths[k].getPointAtLength(Math.min(d, lens[k]));
+    p.setAttribute("cx", pt.x); p.setAttribute("cy", pt.y);
+    anim = requestAnimationFrame(tick);
+  };
+  anim = requestAnimationFrame(tick);
+}
+
+function stop() { if (playing) { clearInterval(playing); playing = null; document.getElementById("play").textContent = "Play all"; } }
+document.getElementById("next").addEventListener("click", () => { stop(); show(cur === STEPS.length - 1 ? 0 : cur + 1); });
+document.getElementById("prev").addEventListener("click", () => { stop(); if (cur > 0) show(cur - 1); });
+document.getElementById("play").addEventListener("click", () => {
+  if (playing) return stop();
+  document.getElementById("play").textContent = "Pause";
+  if (cur === STEPS.length - 1) show(0);
+  playing = setInterval(() => { if (cur >= STEPS.length - 1) return stop(); show(cur + 1); }, 4200);
+});
+document.addEventListener("keydown", ev => {
+  if (ev.target.closest && ev.target.closest(".node")) return;
+  if (ev.key === "ArrowRight") { stop(); if (cur < STEPS.length - 1) show(cur + 1); }
+  if (ev.key === "ArrowLeft") { stop(); if (cur > 0) show(cur - 1); }
+});
+show(0);
+</script>
+</body></html>

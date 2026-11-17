@@ -118,42 +118,7 @@ class AgentSystem:
         return state
 
     def _llm_generate(self, brief: dict) -> Level:
-        goals = "\n".join(f"- {g['description']} ({g['share']:.0%} of reviews): {g['design_modification']}"
-                          for g in brief.get("design_goals", [])[:5])
-        system = ("You are a game level designer. You design small top-down dungeon levels as ASCII grids.\n"
-                  "Tiles: # wall, . floor, S start (exactly one), E exit (exactly one), K key, D locked door, "
-                  "M monster, T trap, H health potion, C coin.\n"
-                  "Rules: grid 21-25 columns x 13-15 rows, every row the same length, outer border all '#', "
-                  "the exit must be reachable from the start (a door needs a key reachable before it). "
-                  "Design guidance: build 4-7 small rooms joined by 1-tile-wide corridors, so hazards in "
-                  "corridors cannot simply be walked around. Include roughly 5-8 monsters, 3-6 traps, "
-                  "4-6 coins mostly in side rooms/dead ends, 1-3 potions, and optionally one key + door "
-                  "guarding the exit. Avoid large empty open areas. A level everyone finishes without "
-                  "losing HP is a failed design.")
-        user = (f"Player feedback says:\n{goals}\n\n"
-                f"Design a level for these players. Target: about {brief['target_completion']:.0%} of "
-                f"players should finish. Return JSON: "
-                '{"name": "...", "notes": "one sentence design intent", "grid": ["row1", "row2", ...]}')
-        data = self.llm.chat_json(system, user, temperature=0.7)
-        lvl = Level(name=str(data.get("name", "llm_level"))[:40], grid=[str(r) for r in data["grid"]],
-                    notes=str(data.get("notes", ""))[:200])
-        errs = validate(lvl)
-        if errs:
-            # one self-correction attempt, then deterministic repair
-            try:
-                fix = self.llm.chat_json(system, user + "\n\nYour previous grid had problems: " +
-                                         "; ".join(errs) + "\nPrevious grid:\n" + "\n".join(lvl.grid) +
-                                         "\nReturn a corrected JSON object.", temperature=0.3)
-                lvl2 = Level(lvl.name, [str(r) for r in fix["grid"]], lvl.notes)
-                if not validate(lvl2):
-                    return lvl2
-                lvl = lvl2
-            except (LLMError, KeyError, TypeError):
-                pass
-            lvl = repair(lvl, seed=self.seed)
-            if validate(lvl):
-                raise LLMError("generated level could not be repaired")
-        return lvl
+        return llm_generate_level(self.llm, brief, self.seed)
 
     def simulate(self, state: LoopState) -> LoopState:
         cands = state["candidates"]
@@ -234,31 +199,7 @@ class AgentSystem:
         return state
 
     def _llm_critic(self, best: dict, brief: dict, tried: dict) -> dict:
-        facts = rule_critic(best["metrics"], best["quality"], brief, Level.from_dict(best["level"]))
-        system = ("You are a game-design critic analysing simulated playtests of a dungeon level. "
-                  "Three bot types played it: rusher (ignores danger), cautious (avoids danger), "
-                  "explorer (collects items). Diagnose why the level misses its design targets.\n"
-                  + SCORE_GUIDE)
-        user = (f"Design targets: completion rate {brief['target_completion']}, "
-                f"HP lost by finishers {brief['target_tension']}.\n"
-                f"Quality components: {json.dumps(best['quality'])}\n"
-                f"Metrics: {json.dumps(_metrics_brief(best['metrics']))}\n"
-                f"Measured gaps from the simulator: {json.dumps([d['cause'] for d in facts['diagnosis']])}\n"
-                f"Level contents: {json.dumps(Level.from_dict(best['level']).summary())}\n"
-                f"Priorities already tried WITHOUT improving the score (choose a different one unless "
-                f"nothing else is wrong): {json.dumps(tried)}\n"
-                f"Grid:\n" + "\n".join(best["level"]["grid"]) +
-                f"\n\nUse ONLY these problem ids: {PROBLEM_IDS}.\n"
-                'Return a JSON object: {"diagnosis": [{"problem": "<id>", "cause": "short evidence from the '
-                'numbers", "fix": "short suggestion"}], "priority": "<id>"} with at most 4 diagnosis items.')
-        data = self.llm.chat_json(system, user, temperature=0.3)
-        diag = [d for d in data.get("diagnosis", []) if isinstance(d, dict) and d.get("problem") in PROBLEM_IDS]
-        if not diag:
-            raise LLMError("critic returned no valid diagnosis")
-        if data.get("priority") not in PROBLEM_IDS:
-            data["priority"] = diag[0]["problem"]
-        data["diagnosis"] = diag
-        return data
+        return llm_critic(self.llm, best, brief, tried)
 
     def optimizer(self, state: LoopState) -> LoopState:
         best = state["best"]
@@ -363,6 +304,78 @@ class AgentSystem:
         graph = self.build_graph()
         return graph.invoke({"brief": brief, "max_rounds": max_rounds, "log": []},
                             {"recursion_limit": 100})
+
+
+# ---------------------------------------------------------------------------
+# LLM steps shared with the A2A agent team (levelforge/team)
+# ---------------------------------------------------------------------------
+def llm_generate_level(llm: LLM, brief: dict, seed: int = 0) -> Level:
+    """GenAI level design from the brief: one self-correction attempt, then deterministic repair."""
+    goals = "\n".join(f"- {g['description']} ({g['share']:.0%} of reviews): {g['design_modification']}"
+                      for g in brief.get("design_goals", [])[:5])
+    system = ("You are a game level designer. You design small top-down dungeon levels as ASCII grids.\n"
+              "Tiles: # wall, . floor, S start (exactly one), E exit (exactly one), K key, D locked door, "
+              "M monster, T trap, H health potion, C coin.\n"
+              "Rules: grid 21-25 columns x 13-15 rows, every row the same length, outer border all '#', "
+              "the exit must be reachable from the start (a door needs a key reachable before it). "
+              "Design guidance: build 4-7 small rooms joined by 1-tile-wide corridors, so hazards in "
+              "corridors cannot simply be walked around. Include roughly 5-8 monsters, 3-6 traps, "
+              "4-6 coins mostly in side rooms/dead ends, 1-3 potions, and optionally one key + door "
+              "guarding the exit. Avoid large empty open areas. A level everyone finishes without "
+              "losing HP is a failed design.")
+    user = (f"Player feedback says:\n{goals}\n\n"
+            f"Design a level for these players. Target: about {brief['target_completion']:.0%} of "
+            f"players should finish. Return JSON: "
+            '{"name": "...", "notes": "one sentence design intent", "grid": ["row1", "row2", ...]}')
+    data = llm.chat_json(system, user, temperature=0.7)
+    lvl = Level(name=str(data.get("name", "llm_level"))[:40], grid=[str(r) for r in data["grid"]],
+                notes=str(data.get("notes", ""))[:200])
+    errs = validate(lvl)
+    if errs:
+        # one self-correction attempt, then deterministic repair
+        try:
+            fix = llm.chat_json(system, user + "\n\nYour previous grid had problems: " +
+                                     "; ".join(errs) + "\nPrevious grid:\n" + "\n".join(lvl.grid) +
+                                     "\nReturn a corrected JSON object.", temperature=0.3)
+            lvl2 = Level(lvl.name, [str(r) for r in fix["grid"]], lvl.notes)
+            if not validate(lvl2):
+                return lvl2
+            lvl = lvl2
+        except (LLMError, KeyError, TypeError):
+            pass
+        lvl = repair(lvl, seed=seed)
+        if validate(lvl):
+            raise LLMError("generated level could not be repaired")
+    return lvl
+
+
+def llm_critic(llm: LLM, best: dict, brief: dict, tried: dict) -> dict:
+    """LLM diagnosis of a play-tested level, grounded in the simulator's measured gaps."""
+    facts = rule_critic(best["metrics"], best["quality"], brief, Level.from_dict(best["level"]))
+    system = ("You are a game-design critic analysing simulated playtests of a dungeon level. "
+              "Three bot types played it: rusher (ignores danger), cautious (avoids danger), "
+              "explorer (collects items). Diagnose why the level misses its design targets.\n"
+              + SCORE_GUIDE)
+    user = (f"Design targets: completion rate {brief['target_completion']}, "
+            f"HP lost by finishers {brief['target_tension']}.\n"
+            f"Quality components: {json.dumps(best['quality'])}\n"
+            f"Metrics: {json.dumps(_metrics_brief(best['metrics']))}\n"
+            f"Measured gaps from the simulator: {json.dumps([d['cause'] for d in facts['diagnosis']])}\n"
+            f"Level contents: {json.dumps(Level.from_dict(best['level']).summary())}\n"
+            f"Priorities already tried WITHOUT improving the score (choose a different one unless "
+            f"nothing else is wrong): {json.dumps(tried)}\n"
+            f"Grid:\n" + "\n".join(best["level"]["grid"]) +
+            f"\n\nUse ONLY these problem ids: {PROBLEM_IDS}.\n"
+            'Return a JSON object: {"diagnosis": [{"problem": "<id>", "cause": "short evidence from the '
+            'numbers", "fix": "short suggestion"}], "priority": "<id>"} with at most 4 diagnosis items.')
+    data = llm.chat_json(system, user, temperature=0.3)
+    diag = [d for d in data.get("diagnosis", []) if isinstance(d, dict) and d.get("problem") in PROBLEM_IDS]
+    if not diag:
+        raise LLMError("critic returned no valid diagnosis")
+    if data.get("priority") not in PROBLEM_IDS:
+        data["priority"] = diag[0]["problem"]
+    data["diagnosis"] = diag
+    return data
 
 
 # ---------------------------------------------------------------------------

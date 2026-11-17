@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "levelforge-twin": {
+      "command": "C:\\Users\\swastik dasgupta\\Desktop\\mcs_proj2\\LevelForge\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\swastik dasgupta\\Desktop\\mcs_proj2\\LevelForge\\mcp_twin.py"]
+    }
+  }
+}

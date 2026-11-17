@@ -1,0 +1,409 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0">
+<title>LevelForge Twin Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: same visual language as the Agent Map and Pipeline Map. Physical side on the left, the virtual twin
+   top-right, its services and compute bottom-right; narration card and detail card underneath. */
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --ink: #18202c;
+  --muted: #5a6475;
+  --line: #d3d9e2;
+  --phys: #c96a12;
+  --twin: #2c66d8;
+  --data: #6a4fd1;
+  --svc: #17895c;
+  --warn: #cf3b3b;
+  --dim: 0.22;
+  --f-display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1218; --panel: #161c25; --ink: #e5e9f1; --muted: #97a1b2; --line: #2a3341;
+    --phys: #f0973f; --twin: #6b9dff; --data: #a28dff; --svc: #3cc28c; --warn: #ff6b6b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1218; --panel: #161c25; --ink: #e5e9f1; --muted: #97a1b2; --line: #2a3341;
+  --phys: #f0973f; --twin: #6b9dff; --data: #a28dff; --svc: #3cc28c; --warn: #ff6b6b; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--f-body); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 18px; }
+header { display: grid; gap: 6px; }
+h1 { font: 700 clamp(26px, 4vw, 36px)/1.1 var(--f-display); margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.lede { margin: 0; color: var(--muted); max-width: 74ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 26px; height: 0; border-top: 3px solid; display: inline-block; }
+.lg-data i { border-color: var(--data); } .lg-twin i { border-color: var(--twin); }
+.lg-svc i { border-color: var(--svc); } .lg-out i { border-color: var(--phys); border-top-style: dashed; }
+
+.diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 820px; height: auto; }
+svg text { fill: var(--ink); font-family: var(--f-body); }
+.zone-title { font: 600 13px var(--f-display); letter-spacing: .12em; text-transform: uppercase; }
+.zone rect { fill: none; stroke: var(--line); stroke-dasharray: 2 6; }
+.zone-p .zone-title { fill: var(--phys); } .zone-t .zone-title { fill: var(--twin); } .zone-s .zone-title { fill: var(--svc); }
+
+.node rect { stroke-width: 1.6; transition: opacity .25s, stroke-width .25s; }
+.node .name { font: 700 15px var(--f-display); }
+.node .role { font-size: 12px; fill: var(--muted); }
+.node .mono { font-family: var(--f-mono); font-size: 11.5px; fill: var(--muted); }
+.node.phys rect { fill: color-mix(in srgb, var(--phys) 12%, var(--panel)); stroke: var(--phys); }
+.node.twin rect { fill: color-mix(in srgb, var(--twin) 11%, var(--panel)); stroke: var(--twin); }
+.node.core rect { fill: color-mix(in srgb, var(--twin) 20%, var(--panel)); stroke: var(--twin); stroke-width: 2.4; }
+.node.bot rect { fill: var(--panel); stroke: var(--twin); }
+.node.gen rect { fill: color-mix(in srgb, var(--data) 12%, var(--panel)); stroke: var(--data); }
+.node.svc rect { fill: color-mix(in srgb, var(--svc) 12%, var(--panel)); stroke: var(--svc); }
+.node { cursor: pointer; }
+.node:focus-visible rect, .node.picked rect { stroke-width: 3.4; }
+
+.edge { fill: none; stroke-width: 2; transition: opacity .25s; }
+.edge.data { stroke: var(--data); } .edge.twin { stroke: var(--twin); } .edge.svc { stroke: var(--svc); }
+.edge.out { stroke: var(--phys); stroke-dasharray: 7 5; } .edge.phys { stroke: var(--phys); }
+.edge-label { font: 600 11px var(--f-mono); }
+.edge-label.data { fill: var(--data); } .edge-label.twin { fill: var(--twin); } .edge-label.svc { fill: var(--svc); }
+.edge-label.out, .edge-label.phys { fill: var(--phys); }
+svg.focus .node:not(.on), svg.focus .edge:not(.on), svg.focus .edge-label:not(.on) { opacity: var(--dim); }
+svg.focus .edge.on { stroke-width: 3.2; }
+.pulse { fill: var(--ink); }
+
+.below { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 860px) { .below { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.eyebrow { font: 600 12px var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.card h2 { font: 700 21px/1.25 var(--f-display); margin: 0; text-wrap: balance; }
+.say { margin: 0; padding: 10px 14px; border-left: 3px solid var(--twin); background: color-mix(in srgb, var(--twin) 7%, var(--panel)); border-radius: 0 6px 6px 0; }
+.say b { font-family: var(--f-display); font-weight: 600; letter-spacing: .04em; }
+.detail { margin: 0; color: var(--muted); font-size: 15px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: 600 14px var(--f-display); letter-spacing: .04em; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 7px; padding: 8px 14px; cursor: pointer; }
+button.primary { background: var(--twin); border-color: var(--twin); color: var(--panel); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible { outline: 3px solid color-mix(in srgb, var(--twin) 45%, transparent); outline-offset: 2px; }
+.dots { display: flex; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+.dots button { width: 26px; height: 26px; padding: 0; font: 600 11px var(--f-mono); border-radius: 50%; }
+.dots button.cur { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 15px; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; }
+code { font-family: var(--f-mono); font-size: 13px; background: color-mix(in srgb, var(--ink) 7%, var(--panel)); padding: 1px 5px; border-radius: 4px; }
+
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 560px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--f-display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+td:first-child { font-weight: 700; white-space: nowrap; }
+td.num { font-family: var(--f-mono); font-size: 13.5px; white-space: nowrap; }
+
+.gloss { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.gloss div { display: grid; gap: 4px; align-content: start; }
+.gloss b { font-family: var(--f-display); font-size: 16px; }
+.gloss p { margin: 0; color: var(--muted); font-size: 15px; }
+.k-phys { color: var(--phys); } .k-twin { color: var(--twin); } .k-data { color: var(--data); } .k-svc { color: var(--svc); } .k-warn { color: var(--warn); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>LevelForge Twin Map</h1>
+    <p class="lede">The digital twin is a fast, simplified copy of our game. It lets AI agents test thousands of level changes in seconds instead of asking humans to play every version. Press <b>Next</b> to walk through it, or click any box.</p>
+    <div class="legend" aria-label="Line colours">
+      <span class="lg-data"><i></i>Data in: game → twin</span>
+      <span class="lg-twin"><i></i>Inside the twin</span>
+      <span class="lg-svc"><i></i>Services: tools and compute</span>
+      <span class="lg-out"><i></i>Data out: twin → game</span>
+    </div>
+  </header>
+
+  <div class="diagram">
+    <svg id="map" viewBox="0 0 1200 820" role="img" aria-label="Diagram of the LevelForge digital twin architecture">
+      <defs>
+        <marker id="ar-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--data)"/></marker>
+        <marker id="ar-twin" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--twin)"/></marker>
+        <marker id="ar-svc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--svc)"/></marker>
+        <marker id="ar-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--phys)"/></marker>
+        <marker id="ar-phys" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--phys)"/></marker>
+      </defs>
+      <g class="zone zone-p"><rect x="12" y="12" width="340" height="796" rx="10"/><text class="zone-title" x="30" y="38">Physical side · the real game</text></g>
+      <g class="zone zone-t"><rect x="366" y="12" width="822" height="512" rx="10"/><text class="zone-title" x="1170" y="38" text-anchor="end">Virtual side · the digital twin</text></g>
+      <g class="zone zone-s"><rect x="366" y="538" width="822" height="270" rx="10"/><text class="zone-title" x="384" y="564">Twin services · tools, compute, agents</text></g>
+      <g id="edges"></g>
+      <g id="labels"></g>
+      <g id="nodes"></g>
+      <circle id="pulse" class="pulse" r="6" cx="-20" cy="-20"/>
+    </svg>
+  </div>
+
+  <div class="below">
+    <section class="card" aria-live="polite">
+      <div class="eyebrow" id="stepNo">Overview</div>
+      <h2 id="stepTitle"></h2>
+      <p class="say"><b>Say:</b> <span id="stepSay"></span></p>
+      <p class="detail" id="stepDetail"></p>
+      <div class="controls">
+        <button id="prev" type="button">Back</button>
+        <button id="next" type="button" class="primary">Next</button>
+        <button id="play" type="button">Play all</button>
+        <div class="dots" id="dots" aria-label="Jump to step"></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="eyebrow">Selected box</div>
+      <h2 id="nName"></h2>
+      <p class="detail" id="nWhat"></p>
+      <dl id="nFacts"></dl>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="eyebrow">Game vs twin: what is copied exactly, what is simplified</div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Thing</th><th>In the 3D game</th><th>In the twin</th><th>Same?</th></tr></thead>
+        <tbody>
+          <tr><td>Level layout</td><td>Corridors built from the grid</td><td>The same grid of 10 tile types</td><td>Exact copy</td></tr>
+          <tr><td>Player health</td><td class="num">start 10, max 12</td><td class="num">START_HP 10, MAX_HP 12</td><td>Exact copy</td></tr>
+          <tr><td>Enemy</td><td>Hunter drone, 3 hits to destroy</td><td>Monster <span class="num">M</span>, MONSTER_HP 3</td><td>Exact copy</td></tr>
+          <tr><td>Hazard</td><td>Proximity mine</td><td>Trap <span class="num">T</span>, 3 damage</td><td>Same damage</td></tr>
+          <tr><td>Healing</td><td>Med-kit</td><td>Potion <span class="num">H</span>, +4 HP</td><td>Exact copy</td></tr>
+          <tr><td>Key, door, exit, score</td><td>Keycard, blast door, portal, data cores</td><td><span class="num">K D E C</span> tiles</td><td>Exact copy</td></tr>
+          <tr><td>Aiming and dodging</td><td>Real-time, mouse and keys</td><td>Dice rolls: hit 60%, trap triggers 60%, drone lunges 25%</td><td>Simplified</td></tr>
+          <tr><td>Players</td><td>Humans</td><td>3 rule-based bots: rusher, cautious, explorer</td><td>Simplified</td></tr>
+          <tr><td>Time</td><td>Continuous, 60 frames a second</td><td>Turns on a grid; ~4 ms per playthrough</td><td>Simplified</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">The words to explain</div>
+    <div class="gloss">
+      <div><b class="k-twin">Digital twin</b><p>A virtual copy of a real thing that stays linked to it: data flows from the real thing into the copy, and what we learn in the copy flows back.</p></div>
+      <div><b class="k-phys">Physical twin</b><p>The real thing being copied. Here: the playable 3D game and the people who play it.</p></div>
+      <div><b class="k-data">Fidelity</b><p>How closely the twin matches reality. Ours copies layout and numbers exactly, but turns real-time skill into probabilities.</p></div>
+      <div><b class="k-svc">What-if analysis</b><p>Testing a change in the twin before making it for real: "if we remove this drone, how many players finish?"</p></div>
+      <div><b class="k-twin">Common random numbers</b><p>Every candidate level is played with the same dice rolls, so a better score comes from a better level, not luck.</p></div>
+      <div><b class="k-warn">Validation</b><p>Checking the twin against real players. Our team found level 3 hardest while the bots rated it slightly easier, so this is our next step.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+// ---------------------------------------------------------------- boxes
+const N = {
+  game:     { x: 36,  y: 70,  w: 262, h: 80, cls: "phys", name: "3D game: Breach", role: "real-time shooter (Three.js)" },
+  players:  { x: 36,  y: 210, w: 262, h: 80, cls: "phys", name: "Human players", role: "play the levels, then complain" },
+  reviews:  { x: 36,  y: 350, w: 262, h: 80, cls: "phys", name: "Player reviews", role: "“too hard”, “kept getting lost”" },
+  dev:      { x: 36,  y: 490, w: 262, h: 80, cls: "phys", name: "Developer", role: "gives the level, gets the fix" },
+  level:    { x: 400, y: 70,  w: 230, h: 78, cls: "twin", name: "Level model", role: "grid of 10 tile types", mono: false },
+  rules:    { x: 660, y: 70,  w: 230, h: 78, cls: "twin", name: "Rules engine", role: "HP 10 · drone 3 HP · mine 3", mono: false },
+  brief:    { x: 920, y: 70,  w: 240, h: 78, cls: "gen", name: "Design brief", role: "target: 71% finish, 35% HP lost" },
+  sim:      { x: 400, y: 200, w: 490, h: 78, cls: "core", name: "Simulated playthrough", role: "level + bot + seed → what happened" },
+  rusher:   { x: 400, y: 312, w: 150, h: 62, cls: "bot", name: "Rusher", role: "shortest path" },
+  cautious: { x: 570, y: 312, w: 150, h: 62, cls: "bot", name: "Cautious", role: "avoids danger, heals" },
+  explorer: { x: 740, y: 312, w: 150, h: 62, cls: "bot", name: "Explorer", role: "collects, then exits" },
+  metrics:  { x: 920, y: 200, w: 240, h: 78, cls: "twin", name: "Metrics", role: "completion, deaths, damage…" },
+  quality:  { x: 920, y: 312, w: 240, h: 78, cls: "core", name: "Quality score", role: "5 parts → one number 0–1" },
+  edits:    { x: 400, y: 420, w: 490, h: 72, cls: "twin", name: "Validator + structured edits", role: "every change keeps the level playable" },
+  mcp:      { x: 400, y: 590, w: 490, h: 74, cls: "svc", name: "MCP tools", role: "validate_level · apply_edits · evaluate_levels", mono: true },
+  cluster:  { x: 400, y: 710, w: 490, h: 74, cls: "svc", name: "Master–worker cluster", role: "5 workers · same seeds for every candidate" },
+  team:     { x: 920, y: 590, w: 240, h: 74, cls: "svc", name: "Agent team", role: "Director + 8 agents decide" },
+  output:   { x: 920, y: 710, w: 240, h: 74, cls: "phys", name: "Optimised level", role: "+ designer notes + report" },
+};
+const cx = n => N[n].x + N[n].w / 2, cy = n => N[n].y + N[n].h / 2;
+const R = n => N[n].x + N[n].w, B = n => N[n].y + N[n].h;
+
+// ---------------------------------------------------------------- lines
+const E = {
+  "game-players":   { d: `M${cx("game")},${B("game")} V${N.players.y}`, kind: "phys", label: "play", lx: cx("game") + 8, ly: 184 },
+  "players-reviews":{ d: `M${cx("players")},${B("players")} V${N.reviews.y}`, kind: "phys", label: "write", lx: cx("players") + 8, ly: 324 },
+  "dev-level":      { d: `M${R("dev")},${cy("dev") - 10} H330 V${cy("level")} H${N.level.x}`, kind: "data", label: "level grid", lx: 326, ly: 440, rot: true },
+  "game-rules":     { d: `M${R("game")},${N.game.y + 18} H316 V52 H${cx("rules")} V${N.rules.y}`, kind: "data", label: "same game values", lx: 440, ly: 46 },
+  "reviews-brief":  { d: `M${R("reviews")},${cy("reviews")} H346 V174 H${cx("brief")} V${B("brief")}`, kind: "data", label: "GenAI: reviews → targets", lx: 800, ly: 168 },
+  "level-sim":      { d: `M${cx("level")},${B("level")} V${N.sim.y}`, kind: "twin" },
+  "rules-sim":      { d: `M${cx("rules")},${B("rules")} V${N.sim.y}`, kind: "twin" },
+  "sim-rusher":     { d: `M${cx("rusher")},${B("sim")} V${N.rusher.y}`, kind: "twin" },
+  "sim-cautious":   { d: `M${cx("cautious")},${B("sim")} V${N.cautious.y}`, kind: "twin" },
+  "sim-explorer":   { d: `M${cx("explorer")},${B("sim")} V${N.explorer.y}`, kind: "twin" },
+  "sim-metrics":    { d: `M${R("sim")},${cy("sim")} H${N.metrics.x}`, kind: "twin" },
+  "metrics-quality":{ d: `M${cx("metrics")},${B("metrics")} V${N.quality.y}`, kind: "twin" },
+  "brief-quality":  { d: `M${R("brief")},${cy("brief")} H1176 V${cy("quality")} H${R("quality")}`, kind: "data", label: "targets", lx: 1130, ly: 300 },
+  "edits-level":    { d: `M${N.edits.x},${cy("edits")} H384 V${cy("level") + 14} H${N.level.x}`, kind: "twin", label: "candidate level", lx: 380, ly: 330, rot: true },
+  "mcp-edits":      { d: `M${cx("edits")},${N.mcp.y} V${B("edits")}`, kind: "svc", label: "apply_edits", lx: cx("edits") + 8, ly: 526 },
+  "mcp-cluster":    { d: `M${cx("mcp")},${B("mcp")} V${N.cluster.y}`, kind: "svc", label: "evaluate_levels", lx: cx("mcp") + 8, ly: 692 },
+  "cluster-sim":    { d: `M${R("cluster")},${cy("cluster") - 12} H905 V${cy("sim") + 14} H${R("sim")}`, kind: "svc", label: "1,800 playthroughs / round", lx: 917, ly: 470, rot: true },
+  "quality-team":   { d: `M${cx("quality")},${B("quality")} V${N.team.y}`, kind: "svc", label: "scores", lx: cx("quality") + 8, ly: 560 },
+  "team-mcp":       { d: `M${N.team.x},${cy("team")} H${R("mcp")}`, kind: "svc" },
+  "team-output":    { d: `M${cx("team")},${B("team")} V${N.output.y}`, kind: "svc" },
+  "output-dev":     { d: `M${N.output.x + 30},${B("output")} V794 H314 V${cy("dev") + 12} H${R("dev")}`, kind: "out", label: "fix + notes", lx: 230, ly: 592 },
+  "output-game":    { d: `M${N.output.x + 60},${B("output")} V801 H24 V${cy("game")} H${N.game.x}`, kind: "out", label: "new level in the game", lx: 40, ly: 700 },
+};
+
+const svg = document.getElementById("map");
+const gE = document.getElementById("edges"), gL = document.getElementById("labels"), gN = document.getElementById("nodes");
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+for (const id in E) {
+  const e = E[id];
+  e.el = el("path", { d: e.d, class: `edge ${e.kind}`, "marker-end": `url(#ar-${e.kind})` }, gE);
+  if (e.label) {
+    const at = { x: e.lx, y: e.ly, class: `edge-label ${e.kind}` };
+    if (e.rot) { at.transform = `rotate(-90 ${e.lx} ${e.ly})`; at["text-anchor"] = "middle"; }
+    e.lab = el("text", at, gL); e.lab.textContent = e.label;
+  }
+}
+for (const id in N) {
+  const n = N[id];
+  const g = el("g", { class: `node ${n.cls}`, tabindex: "0", role: "button", "aria-label": n.name }, gN);
+  el("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 8 }, g);
+  const ty = n.y + n.h / 2 - 3;
+  const t = el("text", { x: n.x + n.w / 2, y: ty, "text-anchor": "middle", class: "name" }, g); t.textContent = n.name;
+  const r = el("text", { x: n.x + n.w / 2, y: ty + 20, "text-anchor": "middle", class: n.mono ? "mono" : "role" }, g); r.textContent = n.role;
+  n.g = g;
+  g.addEventListener("click", () => pick(id));
+  g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(id); } });
+}
+
+// ---------------------------------------------------------------- box details
+const INFO = {
+  game: ["3D game: Breach (physical twin)", "The real product: a first-person shooter where players aim, dodge and fight in real time. Testing a level change here needs people to play it, which is slow.", [["Built from", "the same level grids as the twin"], ["Run", "<code>python play.py</code>"]]],
+  players: ["Human players", "Real people play the levels. They are the reason the twin exists: we want to predict how they will experience a level before they play it.", [["In the twin", "replaced by 3 player bots"]]],
+  reviews: ["Player reviews", "What players say about a level. This is the feedback data that flows into the twin.", [["File", "<code>data/sample_reviews_synthetic.csv</code>"], ["Top complaint", "too hard (23%)"]]],
+  dev: ["Developer", "Hands in the level players complained about and receives the optimised level with notes explaining each change.", [["Input file", "<code>data/problem_level.txt</code>"], ["Gets back", "fixed level, designer notes, report"]]],
+  level: ["Level model", "The level as a grid of characters: # wall, . floor, S start, E exit, K key, D door, M monster, T trap, H potion, C coin. A validator checks it is playable.", [["Code", "<code>levelforge/level.py</code>"], ["Checks", "one start, one exit, exit reachable, key before door"]]],
+  rules: ["Rules engine", "The game's numbers, copied exactly, plus probabilities that stand in for real-time skill.", [["Code", "<code>levelforge/simulator.py</code>"], ["Exact", "start HP 10, max 12, monster 3 HP, trap 3 damage, potion +4"], ["Simplified", "hit 60%, trap triggers 60%, monster lunges 25%"]]],
+  brief: ["Design brief (GenAI)", "The LLM labels each review with design problems and turns the shares into targets the twin can measure.", [["Code", "<code>levelforge/reviews.py</code>"], ["Targets", "71% of players finish, finishers lose 35% of HP"], ["Also sets", "the weights of the 5 score parts"]]],
+  sim: ["Simulated playthrough", "One run of one bot through one level with one random seed. It records whether the bot finished, died or ran out of steps, plus damage, fights, traps and steps.", [["Speed", "about 4 ms per playthrough"], ["Deterministic", "same level + bot + seed → same result"], ["Step limit", "3 × floor tiles + 20"]]],
+  rusher: ["Rusher bot", "Takes the shortest path and barely cares about danger.", [["Path costs", "trap 1, monster 2, next to monster 0"], ["Planner", "Dijkstra, re-plans when the level changes"]]],
+  cautious: ["Cautious bot", "Avoids traps and monsters and detours to heal when its health drops to 5 or less.", [["Path costs", "trap 10, monster 25, next to monster 4"]]],
+  explorer: ["Explorer bot", "Collects coins and potions while it has time and health, then heads for the exit.", [["Path costs", "trap 4, monster 6, next to monster 1.5"]]],
+  metrics: ["Metrics", "Hundreds of playthroughs are summarised into numbers a designer cares about.", [["Code", "<code>levelforge/metrics.py</code>"], ["Includes", "completion, death and timeout rates, damage, backtracking, exploration, coins collected, completion per bot type"]]],
+  quality: ["Quality score", "Five parts, each 0 to 1, combined with the brief's weights into one number the agents try to raise.", [["Balance", "completion close to the target"], ["Engagement", "explorers find coins, levels get explored"], ["Flow", "little backtracking"], ["Skill", "careful play beats reckless play"], ["Tension", "finishers lose about the target HP"]]],
+  edits: ["Validator + structured edits", "The agents never draw on the grid. They choose edits like “remove 1 monster on the main route” or “open a loop”, and the twin applies them and refuses any that would break the level.", [["Code", "<code>levelforge/edits.py</code>"], ["Edits", "add/remove M, T, H, C on or off the main route; add loop; add/remove lock"]]],
+  mcp: ["MCP tools", "The twin's front door. Any agent, or Claude Desktop, can use the twin through these standard tools.", [["Code", "<code>levelforge/mcp_server.py</code>"], ["10 tools", "validate_level, generate_level, repair_level, apply_edits, level_summary, evaluate_levels, cluster_status, kill_worker, inject_fault, get_rules"]]],
+  cluster: ["Master–worker cluster", "Runs the twin many times in parallel. The master hands out chunks of 8 playthroughs to 5 worker processes and recovers if one crashes.", [["Code", "<code>levelforge/cluster.py</code>"], ["Per round", "4 candidates × 3 bots × 150 = 1,800 playthroughs"], ["Fairness", "every candidate uses the same seeds"]]],
+  team: ["Agent team", "The users of the twin. The Director and 8 agents propose edits, ask the twin for scores, and keep the best level.", [["Talk over", "A2A"], ["Use the twin via", "MCP"]]],
+  output: ["Optimised level", "The result goes back to the physical side: into the 3D game as a new level, and to the developer with notes and a report.", [["Example", "completion 32% → 71% on the problem level"], ["In the game", "level 2, “AI-optimised”"]]],
+};
+function pick(id) {
+  document.querySelectorAll(".node.picked").forEach(n => n.classList.remove("picked"));
+  N[id].g.classList.add("picked");
+  const [name, what, facts] = INFO[id];
+  document.getElementById("nName").textContent = name;
+  document.getElementById("nWhat").textContent = what;
+  document.getElementById("nFacts").innerHTML = facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+// ---------------------------------------------------------------- the walk-through
+const BOTS = ["rusher", "cautious", "explorer"];
+const STEPS = [
+  { t: "A real game and its virtual copy", say: "On the left is the real game and the people who play it. On the right is its digital twin: a fast copy that lets us test level changes without asking humans to play every version.",
+    d: "Purple lines carry data from the game into the twin. Blue lines are the twin's own parts. Green lines are the services that use it. Dashed orange lines carry results back to the game.", nodes: null, edges: null, flow: [] },
+  { t: "The physical side", say: "The real game is a 3D shooter. People play it in real time and write reviews like 'too hard' or 'I kept getting lost'.",
+    d: "Fixing a level the normal way means changing it, asking people to play again, and waiting for new feedback. That is slow.", nodes: ["game", "players", "reviews"], edges: ["game-players", "players-reviews"], flow: ["game-players", "players-reviews"] },
+  { t: "Data in: the level itself", say: "The developer gives the twin the exact level players complained about, as a grid of tiles: walls, start, exit, key, door, monsters, traps, potions and coins.",
+    d: "The 3D game builds its corridors from the same grid, so both sides always describe the same level.", nodes: ["dev", "level"], edges: ["dev-level"], flow: ["dev-level"] },
+  { t: "Data in: the game's rules", say: "The twin uses the game's own numbers: start with 10 health, a drone takes 3 hits, a mine does 3 damage, a med-kit heals 4.",
+    d: "What it cannot copy is real-time skill, so aiming and dodging become probabilities: a 60% chance to hit, a 60% chance a trap triggers, a 25% chance a monster lunges as you pass.", nodes: ["game", "rules"], edges: ["game-rules"], flow: ["game-rules"] },
+  { t: "Data in: what players want", say: "The reviews go through the LLM, which turns complaints into measurable targets: about 71% of players should finish, and finishers should lose about 35% of their health.",
+    d: "This is where GenAI connects player feedback to the twin.", nodes: ["reviews", "brief"], edges: ["reviews-brief"], flow: ["reviews-brief"] },
+  { t: "Simulated players", say: "Instead of humans, three bots play the level: a rusher who takes the shortest path, a cautious player who avoids danger and heals, and an explorer who collects everything first.",
+    d: "Each bot plans its route with Dijkstra's algorithm using its own idea of how bad a trap or monster is, and re-plans when something changes.", nodes: ["sim", ...BOTS], edges: ["sim-rusher", "sim-cautious", "sim-explorer"], flow: ["sim-rusher", "sim-cautious", "sim-explorer"] },
+  { t: "One playthrough", say: "One playthrough is one bot, one level and one random seed. It takes about 4 milliseconds and records whether the bot finished, died or ran out of time.",
+    d: "The same bot, level and seed always give the same result, so every experiment can be repeated exactly.", nodes: ["level", "rules", "sim"], edges: ["level-sim", "rules-sim"], flow: ["level-sim", "rules-sim"] },
+  { t: "From runs to numbers", say: "Hundreds of playthroughs become metrics: how many finish, how many die, how much damage they take, how much they backtrack, and how each bot type did.",
+    d: "On the problem level, only 32% of runs finished, and careful players did no better than reckless ones.", nodes: ["sim", "metrics"], edges: ["sim-metrics"], flow: ["sim-metrics"] },
+  { t: "One quality score", say: "The metrics are compared with the targets from the reviews and combined into one score from 0 to 1: balance, engagement, flow, skill and tension.",
+    d: "The problem level scored 0.48. The agents' job is to raise that number.", nodes: ["metrics", "brief", "quality"], edges: ["metrics-quality", "brief-quality"], flow: ["metrics-quality", "brief-quality"] },
+  { t: "What-if: safe changes", say: "To try a change, the agents choose a structured edit, like 'remove one monster on the main route'. The twin applies it and refuses anything that would make the level impossible.",
+    d: "This is what-if analysis: every candidate level is tested in the twin before anything changes in the real game.", nodes: ["mcp", "edits", "level"], edges: ["mcp-edits", "edits-level"], flow: ["mcp-edits", "edits-level"] },
+  { t: "Thousands of tests in seconds", say: "Each round, four candidate levels are played 1,800 times in total, spread over five worker processes. Every candidate gets the same dice rolls, so the scores are a fair comparison.",
+    d: "This is the multicore part: the twin is cheap enough to run thousands of times, and the master–worker cluster runs it in parallel.", nodes: ["mcp", "cluster", "sim"], edges: ["mcp-cluster", "cluster-sim"], flow: ["mcp-cluster", "cluster-sim"] },
+  { t: "The agents decide", say: "The agent team reads the scores, keeps the best level and plans the next change. Six rounds later the problem level went from 32% to 71% completion.",
+    d: "The agents only ever touch the twin through the MCP tools.", nodes: ["quality", "team", "mcp", "output"], edges: ["quality-team", "team-mcp", "team-output"], flow: ["quality-team", "team-mcp", "team-output"] },
+  { t: "Data out: back to the game", say: "The optimised level goes back to the physical side: it becomes a level in the 3D game, and the developer gets notes explaining every change. New player reviews can then start the loop again.",
+    d: "That two-way link, data in and improvements out, is what makes it a digital twin rather than just a simulation.", nodes: ["output", "game", "dev"], edges: ["output-game", "output-dev"], flow: ["output-dev", "output-game"] },
+];
+
+let cur = 0, playing = null, anim = null;
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const dots = document.getElementById("dots");
+STEPS.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = i === 0 ? "•" : i; b.setAttribute("aria-label", i === 0 ? "Overview" : "Step " + i);
+  b.addEventListener("click", () => { stop(); show(i); });
+  dots.appendChild(b);
+});
+
+function show(i) {
+  cur = i;
+  const s = STEPS[i];
+  document.getElementById("stepNo").textContent = i === 0 ? "Overview" : `Step ${i} of ${STEPS.length - 1}`;
+  document.getElementById("stepTitle").textContent = s.t;
+  document.getElementById("stepSay").textContent = s.say;
+  document.getElementById("stepDetail").textContent = s.d;
+  [...dots.children].forEach((b, k) => b.classList.toggle("cur", k === i));
+  document.getElementById("prev").disabled = i === 0;
+  document.getElementById("next").textContent = i === STEPS.length - 1 ? "Start over" : "Next";
+  const focus = !!s.nodes;
+  svg.classList.toggle("focus", focus);
+  for (const id in N) N[id].g.classList.toggle("on", focus && s.nodes.includes(id));
+  for (const id in E) {
+    const on = focus && s.edges.includes(id);
+    E[id].el.classList.toggle("on", on);
+    if (E[id].lab) E[id].lab.classList.toggle("on", on);
+  }
+  pick(s.nodes ? s.nodes[s.nodes.length - 1] : "sim");
+  runFlow(s.flow);
+}
+
+function runFlow(ids) {
+  const p = document.getElementById("pulse");
+  if (anim) cancelAnimationFrame(anim);
+  p.setAttribute("cx", -20); p.setAttribute("cy", -20);
+  if (reduce || !ids.length) return;
+  const paths = ids.map(id => E[id].el), lens = paths.map(x => x.getTotalLength());
+  const speed = 0.6;
+  let k = 0, t0 = performance.now();
+  const tick = now => {
+    const d = (now - t0) * speed;
+    if (d >= lens[k]) { k++; t0 = now; if (k >= paths.length) { p.setAttribute("cx", -20); return; } }
+    const pt = paths[k].getPointAtLength(Math.min(d, lens[k]));
+    p.setAttribute("cx", pt.x); p.setAttribute("cy", pt.y);
+    anim = requestAnimationFrame(tick);
+  };
+  anim = requestAnimationFrame(tick);
+}
+
+function stop() { if (playing) { clearInterval(playing); playing = null; document.getElementById("play").textContent = "Play all"; } }
+document.getElementById("next").addEventListener("click", () => { stop(); show(cur === STEPS.length - 1 ? 0 : cur + 1); });
+document.getElementById("prev").addEventListener("click", () => { stop(); if (cur > 0) show(cur - 1); });
+document.getElementById("play").addEventListener("click", () => {
+  if (playing) return stop();
+  document.getElementById("play").textContent = "Pause";
+  if (cur === STEPS.length - 1) show(0);
+  playing = setInterval(() => { if (cur >= STEPS.length - 1) return stop(); show(cur + 1); }, 4500);
+});
+document.addEventListener("keydown", ev => {
+  if (ev.target.closest && ev.target.closest(".node")) return;
+  if (ev.key === "ArrowRight") { stop(); if (cur < STEPS.length - 1) show(cur + 1); }
+  if (ev.key === "ArrowLeft") { stop(); if (cur > 0) show(cur - 1); }
+});
+show(0);
+</script>
+</body></html>

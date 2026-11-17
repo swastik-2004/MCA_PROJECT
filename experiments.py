@@ -14,6 +14,10 @@ accept/reject rule, so any difference comes from HOW edits are chosen.
     python experiments.py                       # 8 levels; adds the LLM agent if a key is set
     python experiments.py --levels 4 --offline  # rules only, no API calls
     python experiments.py --methods random,rule_agent
+    python experiments.py --methods rule_agent,team_rules   # single agent loop vs the A2A agent team
+
+Team methods (team_rules, team_llm) run the full multi-agent system: A2A agents, the MCP
+digital-twin server and the master-worker cluster, with the same budget and starting levels.
 """
 from __future__ import annotations
 
@@ -129,7 +133,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     ap.add_argument("--reviews", default=str(ROOT / "data" / "sample_reviews_synthetic.csv"))
     ap.add_argument("--offline", action="store_true", help="skip the LLM agent")
-    ap.add_argument("--methods", default="", help="comma list from random,rule_agent,llm_agent")
+    ap.add_argument("--methods", default="", help="comma list from random,rule_agent,llm_agent,team_rules,team_llm")
     ap.add_argument("--out", default=str(ROOT / "outputs" / "experiments"))
     args = ap.parse_args()
     out = Path(args.out)
@@ -139,9 +143,12 @@ def main() -> None:
     rules = LLM(provider="offline")
     methods = [m for m in (args.methods.split(",") if args.methods else
                            ["random", "rule_agent"] + (["llm_agent"] if llm.online else [])) if m]
-    if "llm_agent" in methods and not llm.online:
-        print("No API key: dropping llm_agent")
-        methods.remove("llm_agent")
+    for m in ("llm_agent", "team_llm"):
+        if m in methods and not llm.online:
+            print(f"No API key: dropping {m}")
+            methods.remove(m)
+    loop_methods = [m for m in methods if not m.startswith("team_")]
+    team_methods = [m for m in methods if m.startswith("team_")]
     # Same design brief for every method (labelled once, by the LLM if available).
     brief = build_brief(label_reviews(load_reviews(args.reviews), llm))
     print(f"Methods: {methods} | LLM: {llm.describe()} | {args.workers} workers | {args.levels} levels x "
@@ -154,19 +161,37 @@ def main() -> None:
     }
     rows, curves = [], {m: [] for m in methods}
     t0 = time.perf_counter()
+    rows = [{"level_seed": seed} for seed in range(args.levels)]
     with ParallelRunner(args.workers) as runner:
         for seed in range(args.levels):
-            row = {"level_seed": seed}
-            for m in methods:
+            row = rows[seed]
+            for m in loop_methods:
                 h = factories[m](runner, seed).run(brief, max_rounds=args.rounds)["history"]
                 curves[m].append([r["best_score"] for r in h])
                 row["raw"] = h[0]["best_score"]
                 row["raw_completion"] = round(h[0]["best_metrics"]["completion_rate"], 3)
                 row[m] = h[-1]["best_score"]
                 row[f"{m}_completion"] = round(h[-1]["best_metrics"]["completion_rate"], 3)
-            rows.append(row)
-            print(f"  level {seed}: raw {row['raw']:.3f} | " +
-                  " | ".join(f"{m} {row[m]:.3f}" for m in methods), flush=True)
+            if loop_methods:
+                print(f"  level {seed}: raw {row['raw']:.3f} | " +
+                      " | ".join(f"{m} {row[m]:.3f}" for m in loop_methods), flush=True)
+    for m in team_methods:
+        from levelforge.team.runtime import TeamRuntime
+        print(f"\n  starting the agent team for {m} ...", flush=True)
+        with TeamRuntime(args.workers, offline=(m == "team_rules"), log_dir=out / f"logs_{m}",
+                         director_console=False) as team:
+            for seed in range(args.levels):
+                res = team.optimise({"mode": "procedural", "seed": seed, "brief": brief, "rounds": args.rounds,
+                                     "candidates": args.candidates, "runs": args.runs, "quiet": 1})
+                h = res["history"]
+                row = rows[seed]
+                curves[m].append([r["best_score"] for r in h])
+                row.setdefault("raw", h[0]["best_score"])
+                row.setdefault("raw_completion", round(h[0]["best_metrics"]["completion_rate"], 3))
+                row[m] = h[-1]["best_score"]
+                row[f"{m}_completion"] = round(h[-1]["best_metrics"]["completion_rate"], 3)
+                row[f"{m}_a2a_messages"] = len(res["a2a_trace"])
+                print(f"  level {seed}: raw {row['raw']:.3f} | {m} {row[m]:.3f}", flush=True)
     elapsed = time.perf_counter() - t0
 
     def ms(key):
@@ -174,7 +199,9 @@ def main() -> None:
         return statistics.mean(v), (statistics.stdev(v) if len(v) > 1 else 0.0)
 
     pairs = []
-    for a, b in (("rule_agent", "random"), ("llm_agent", "random"), ("llm_agent", "rule_agent")):
+    for a, b in (("rule_agent", "random"), ("llm_agent", "random"), ("llm_agent", "rule_agent"),
+                 ("team_rules", "random"), ("team_rules", "rule_agent"), ("team_llm", "random"),
+                 ("team_llm", "llm_agent"), ("team_llm", "team_rules")):
         if a in methods and b in methods:
             w = sum(r[a] > r[b] + 1e-9 for r in rows)
             lo = sum(r[a] < r[b] - 1e-9 for r in rows)
@@ -194,7 +221,8 @@ def main() -> None:
     (out / "summary.json").write_text(json.dumps({"summary": summary, "rows": rows, "curves": curves},
                                                  indent=2), encoding="utf-8")
     labels = {"raw": "No optimisation (raw)", "random": "Random search (same budget)",
-              "rule_agent": "Agent loop, rule-based reasoning", "llm_agent": f"Agent loop, LLM reasoning ({llm.model})"}
+              "rule_agent": "Agent loop, rule-based reasoning", "llm_agent": f"Agent loop, LLM reasoning ({llm.model})",
+              "team_rules": "A2A agent team, rule-based reasoning", "team_llm": f"A2A agent team, LLM reasoning ({llm.model})"}
     table = ["| Method | Mean quality | Std | Mean completion |", "|---|---|---|---|",
              f"| {labels['raw']} | {summary['raw'][0]:.3f} | {summary['raw'][1]:.3f} | {ms('raw_completion')[0]:.0%} |"]
     for m in methods:
@@ -213,8 +241,10 @@ def main() -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        colors = {"raw": "#999999", "random": "#d95f02", "rule_agent": "#1b6ca8", "llm_agent": "#1b9e77"}
-        short = {"raw": "No optimisation", "random": "Random search", "rule_agent": "Rule agent", "llm_agent": "LLM agent"}
+        colors = {"raw": "#999999", "random": "#d95f02", "rule_agent": "#1b6ca8", "llm_agent": "#1b9e77",
+                  "team_rules": "#7b3294", "team_llm": "#c2a5cf"}
+        short = {"raw": "No optimisation", "random": "Random search", "rule_agent": "Rule agent", "llm_agent": "LLM agent",
+                 "team_rules": "Agent team (rules)", "team_llm": "Agent team (LLM)"}
         names = ["raw"] + methods
         fig, ax = plt.subplots(1, 2, figsize=(12, 4.4))
         ax[0].bar([short[n] for n in names], [summary[n][0] for n in names], yerr=[summary[n][1] for n in names],
